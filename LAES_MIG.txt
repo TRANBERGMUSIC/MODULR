@@ -1,0 +1,36 @@
+MODULR - Your tools. One platform.
+Værktøj: Bitrate-tjek (find falske 320 kbps-filer)
+=========================================
+
+INSTALLATION (kun første gang)
+1. Pak zip-filen ud (dobbeltklik på den i Overførsler).
+2. Åbn programmet "Terminal" (Cmd + mellemrum, skriv Terminal, tryk Enter).
+3. Skriv:  bash   (med et mellemrum efter), træk filen "Installer.command"
+   ind i Terminal-vinduet, og tryk Enter.
+4. Hvis Mac'en beder om at installere "udviklerværktøjer", så klik Installer,
+   vent til det er færdigt, og gentag trin 3.
+
+Herefter ligger MODULR under Programmer og kan åbnes som enhver anden app.
+
+BRUG
+Træk filer eller hele mapper ind i vinduet. Hver fil får en vurdering:
+  ✅ Ægte        lyden passer til den bitrate filen påstår
+  ⚠️ Mistænkelig  lidt lavere kvalitet end påstået (fx 256 omdøbt til 320)
+  ❌ Fake         opkonverteret fra lav bitrate (fx 128 -> 320)
+Klik på en fil for at se dens spektrogram. "Eksportér CSV" giver en liste til Excel/Numbers.
+
+BEMÆRK: Gamle optagelser eller meget "mørk" musik kan have naturligt lidt diskant
+og fejlagtigt blive markeret. Kig på spektrogrammet: en falsk fil har en
+knivskarp, vandret kant - ægte musik falder blødt af.
+
+FIND EN BEDRE VERSION
+Når du klikker på en fil, viser panelet til højre kunstner og titel (ret dem,
+hvis de er forkerte). Appen søger selv i iTunes Store, om sangen findes, og
+knapperne åbner søgningen direkte hos Beatport, Traxsource og Bandcamp, der
+sælger 320 kbps MP3, WAV, AIFF og FLAC. CSV-eksporten har et Beatport-link
+for hver fil, så du kan bruge den som indkøbsliste.
+
+AUTO-OPDATERING
+Appen tjekker selv for nye versioner, hver gang den åbnes (og via menuen
+MODULR > Søg efter opdateringer…). Klik "Opdatér nu", så henter den den
+nye version, bygger den og genstarter af sig selv.
