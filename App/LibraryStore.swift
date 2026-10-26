@@ -164,6 +164,82 @@ final class LibraryStore: ObservableObject {
         return ids
     }
 
+    // MARK: Mapper → playlister
+
+    /// Trukket ind eller valgt: mapper bliver til playlister/mapper (som på disken), løse filer lægges i `playlist`.
+    func importDropped(_ urls: [URL], into playlist: UUID? = nil) {
+        var files = [URL]()
+        var dirs = [URL]()
+        for u in urls {
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue { dirs.append(u) } else { files.append(u) }
+        }
+        if !files.isEmpty { importFiles(files, into: playlist) }
+        guard !dirs.isEmpty else { return }
+        DispatchQueue.main.async { self.lastMessage = "Læser mapperne og laver playlister …" }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var made = 0
+            for d in dirs { made += self.importFolderTree(d, parent: nil) }
+            let count = made
+            DispatchQueue.main.async {
+                self.lastMessage = count > 0 ? "\(count) playlister lavet ud fra mapperne – analyserer sangene …" : "Ingen musik fundet i mappen"
+            }
+        }
+    }
+
+    /// TECHNO/ med undermapper → mappe "TECHNO" med en playliste pr. undermappe (og undermapper i undermapper).
+    /// En mappe uden undermapper → én playliste med mappens navn. Løse sange i en mappe der også har
+    /// undermapper → en playliste med mappens navn inde i mappen. Returnerer antal playlister.
+    @discardableResult
+    func importFolderTree(_ dir: URL, parent: UUID?) -> Int {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        var subdirs = [URL]()
+        var files = [URL]()
+        for u in items {
+            if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                if Self.containsAudio(u) { subdirs.append(u) }
+            } else if Self.audioExts.contains(u.pathExtension.lowercased()) {
+                files.append(u)
+            }
+        }
+        subdirs.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        files.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        let name = dir.lastPathComponent
+        if subdirs.isEmpty {
+            guard !files.isEmpty else { return 0 }
+            let pl = findOrCreateNode(name: name, parent: parent, folder: false)
+            importFiles(files, into: pl)
+            return 1
+        }
+        let folder = findOrCreateNode(name: name, parent: parent, folder: true)
+        var made = 0
+        if !files.isEmpty {
+            importFiles(files, into: findOrCreateNode(name: name, parent: folder, folder: false))
+            made += 1
+        }
+        for sd in subdirs { made += importFolderTree(sd, parent: folder) }
+        return made
+    }
+
+    /// Findes der allerede en playliste/mappe med det navn samme sted, bruges den (så samme mappe kan trækkes ind igen).
+    func findOrCreateNode(name: String, parent: UUID?, folder: Bool) -> UUID {
+        if let n = snapshot().nodes.first(where: { $0.parent == parent && $0.isFolder == folder
+            && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+            return n.id
+        }
+        return createNode(name: name, parent: parent, folder: folder)
+    }
+
+    static func containsAudio(_ dir: URL) -> Bool {
+        let en = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        while let f = en?.nextObject() as? URL {
+            if audioExts.contains(f.pathExtension.lowercased()) { return true }
+        }
+        return false
+    }
+
     /// Titel, kunstner osv. fra tags (eller filnavn) – BPM og toneart hvis filen allerede har dem.
     static func applyTags(_ t: inout LibTrack) {
         let url = URL(fileURLWithPath: t.path)

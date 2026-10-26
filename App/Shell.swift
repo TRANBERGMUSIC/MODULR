@@ -141,7 +141,7 @@ struct Sidebar: View {
         case .findBetter:
             return findBetter.busy || findBetter.watchingDownloads ? "•" : nil
         case .library:
-            let n = LibraryStore.shared.index.tracks.filter { $0.analyzed && $0.needsFix }.count
+            let n = LibraryStore.shared.index.tracks.filter { $0.analyzed && ($0.needsFix || $0.needsUpgrade) }.count
             return n > 0 ? "\(n)" : nil
         default:
             return nil

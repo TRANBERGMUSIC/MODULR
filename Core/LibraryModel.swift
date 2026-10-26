@@ -69,7 +69,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
 
     var needsUpgrade: Bool { (tierKbps ?? 9999) < 320 }
 
-    static let gainFixableExts: Set<String> = ["mp3", "wav", "aif", "aiff"]
+    /// Alle formater kan rettes: MP3 tabsfrit, WAV/AIFF i samme format, FLAC/M4A gemmes som 24-bit WAV.
+    static let gainFixableExts: Set<String> = ["mp3", "wav", "aif", "aiff", "flac", "m4a", "aac", "alac"]
     var canFixLoudness: Bool { Self.gainFixableExts.contains(ext) }
 
     /// Skal lydstyrken rettes til målet? (mere end 1 dB ved siden af og ikke allerede rettet)
@@ -82,7 +83,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
     /// 5–7 min ekstra stilhed til sidst (mod copyright-scanning) skal klippes væk.
     var needsTrim: Bool { (deadSpace ?? 0) >= 20 && trimmed != true && loudnessSkip != true }
 
-    var needsFix: Bool { needsUpgrade || needsLoudnessFix(target: LoudnessPrefs.target) || needsTrim }
+    /// Fiks tracks = som Platinum Notes: lydstyrke, klippede toppe og død luft. Kvalitet hører under "Dårlig kvalitet".
+    var needsFix: Bool { needsLoudnessFix(target: LoudnessPrefs.target) || needsTrim }
 
     mutating func resetLoudness() {
         lufs = nil
@@ -152,6 +154,7 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
     case queue = "Til analyse"
     case recent = "Senest tilføjet"
     case upgrade = "Fiks tracks"
+    case badQuality = "Dårlig kvalitet"
 
     var id: String { rawValue }
 
@@ -161,6 +164,7 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
         case .queue: return "clock.arrow.circlepath"
         case .recent: return "sparkles"
         case .upgrade: return "wrench.and.screwdriver"
+        case .badQuality: return "exclamationmark.triangle"
         }
     }
 
@@ -170,6 +174,7 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
         case .queue: return !t.analyzed
         case .recent: return Date().timeIntervalSince(t.addedAt) < 14 * 24 * 3600
         case .upgrade: return t.analyzed && t.needsFix
+        case .badQuality: return t.analyzed && t.needsUpgrade
         }
     }
 }

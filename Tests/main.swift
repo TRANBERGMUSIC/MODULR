@@ -604,7 +604,12 @@ do {
     check("Fiks tracks: gendannet original røres ikke", !t.needsLoudnessFix(target: -9))
     var f = LibTrack(path: "/tmp/x.flac")
     f.lufs = -14
-    check("Fiks tracks: FLAC rettes ikke automatisk", !f.needsLoudnessFix(target: -9))
+    check("Fiks tracks: FLAC rettes også (gemmes som WAV)", f.needsLoudnessFix(target: -9))
+    var bad = LibTrack(path: "/tmp/y.mp3")
+    bad.analyzed = true
+    bad.tierKbps = 128
+    bad.lufs = -9
+    check("Dårlig kvalitet hører ikke under Fiks tracks", !SmartList.upgrade.matches(bad) && SmartList.badQuality.matches(bad))
     check("Smartliste hedder Fiks tracks", SmartList.upgrade.rawValue == "Fiks tracks")
 } catch {
     check("Lydstyrke-test kørte", false, error.localizedDescription)

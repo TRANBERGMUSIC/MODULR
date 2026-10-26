@@ -189,7 +189,7 @@ struct LibrarySidebar: View {
                             ui.selection = .smart(s)
                         }
                         .dropDestination(for: URL.self) { urls, _ in
-                            library.importFiles(urls)
+                            library.importDropped(urls)
                             return true
                         }
                     }
@@ -266,7 +266,7 @@ struct LibrarySidebar: View {
         if p.runModal() == .OK {
             var target: UUID?
             if case .node(let id) = ui.selection, library.index.nodes.first(where: { $0.id == id })?.isFolder == false { target = id }
-            library.importFiles(p.urls, into: target)
+            library.importDropped(p.urls, into: target)
         }
     }
 }
@@ -661,6 +661,16 @@ struct TrackListView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 8)
+            if ui.selection == .smart(.badQuality) {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle").foregroundColor(.mist.opacity(0.6))
+                    Text("Højreklik → \"Udskift fil med bedre version…\" eller \"Find bedre version gratis…\". Cover og data flyttes med, den nye fil analyseres, og er den god nok, forsvinder sangen herfra – den bliver i sine playlister hele tiden.")
+                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.7))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 20).padding(.bottom, 6)
+            }
             if let m = library.lastMessage {
                 HStack {
                     Text(m).font(.system(size: 12)).foregroundColor(.mist.opacity(0.75))
@@ -740,7 +750,7 @@ struct TrackListView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            library.importFiles(urls, into: currentPlaylist)
+            library.importDropped(urls, into: currentPlaylist)
             return true
         } isTargeted: { targeted = $0 }
     }
