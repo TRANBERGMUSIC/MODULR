@@ -63,7 +63,7 @@ final class LibraryStore: ObservableObject {
         index = data
         for t in data.tracks where !t.analyzed { enqueueAnalysis(t.id) }
         // Sange analyseret før lydstyrke-målingen kom med: mål dem nu
-        for t in data.tracks where t.analyzed && t.lufs == nil && t.analysisError == nil { enqueueMeasure(t.id) }
+        for t in data.tracks where t.analyzed && (t.lufs == nil || t.deadSpace == nil) && t.analysisError == nil { enqueueMeasure(t.id) }
     }
 
     private func enqueueMeasure(_ id: UUID) {
@@ -73,8 +73,9 @@ final class LibraryStore: ObservableObject {
             defer { DispatchQueue.main.async { self.analyzing.remove(id) } }
             guard let t = self.snapshot().track(id) else { return }
             if let m = try? Loudness.measure(url: t.url) {
-                self.update(id) { $0.lufs = m.lufs; $0.peakDB = m.peakDB }
-                if LoudnessPrefs.autoFix, let nt = self.snapshot().track(id), nt.needsLoudnessFix(target: LoudnessPrefs.target) {
+                self.update(id) { $0.lufs = m.lufs; $0.peakDB = m.peakDB; $0.deadSpace = m.deadSpace }
+                if LoudnessPrefs.autoFix, let nt = self.snapshot().track(id),
+                   nt.needsLoudnessFix(target: LoudnessPrefs.target) || nt.needsTrim {
                     self.enqueueLoudnessFix(id)
                 }
             }
@@ -115,6 +116,8 @@ final class LibraryStore: ObservableObject {
     func artURL(_ t: LibTrack) -> URL? { t.artFile.map { Self.artFolder.appendingPathComponent($0) } }
     func waveURL(_ t: LibTrack) -> URL { Self.waveFolder.appendingPathComponent("\(t.id.uuidString).bin") }
     func bands(_ t: LibTrack) -> [UInt8] { (try? Data(contentsOf: waveURL(t))).map { [UInt8]($0) } ?? [] }
+    func peakURL(_ t: LibTrack) -> URL { Self.waveFolder.appendingPathComponent("\(t.id.uuidString)-p.bin") }
+    func peaks(_ t: LibTrack) -> [UInt8] { (try? Data(contentsOf: peakURL(t))).map { [UInt8]($0) } ?? [] }
 
     // MARK: Import
 
@@ -218,6 +221,7 @@ final class LibraryStore: ObservableObject {
 
             let music = try MusicAnalyzer.analyze(url: url)
             try Data(music.bands).write(to: waveURL(t), options: .atomic)
+            try? Data(music.peaks).write(to: peakURL(t), options: .atomic)
             t.hasWave = true
             t.waveVersion = LibTrack.currentWaveVersion
             t.duration = music.duration
@@ -230,6 +234,7 @@ final class LibraryStore: ObservableObject {
             if let m = try? Loudness.measure(url: url) {
                 t.lufs = m.lufs
                 t.peakDB = m.peakDB
+                t.deadSpace = m.deadSpace
             }
             t.analyzed = true
             t.analysisError = nil
@@ -264,7 +269,8 @@ final class LibraryStore: ObservableObject {
         DispatchQueue.main.async {
             if PlayerModel.shared.track?.id == id { PlayerModel.shared.refreshBands() }
         }
-        if LoudnessPrefs.autoFix, final.analysisError == nil, final.needsLoudnessFix(target: LoudnessPrefs.target) {
+        if LoudnessPrefs.autoFix, final.analysisError == nil,
+           final.needsLoudnessFix(target: LoudnessPrefs.target) || final.needsTrim {
             enqueueLoudnessFix(id)
         }
     }
@@ -320,7 +326,7 @@ final class LibraryStore: ObservableObject {
             }
         }
         let target = LoudnessPrefs.target
-        let todo = snapshot().tracks.filter { ids.contains($0.id) && (force || $0.needsLoudnessFix(target: target)) }
+        let todo = snapshot().tracks.filter { ids.contains($0.id) && (force || $0.needsLoudnessFix(target: target) || $0.needsTrim) }
         for t in todo { enqueueProcess(t.id, eq: nil, force: force) }
         DispatchQueue.main.async {
             self.lastMessage = todo.isEmpty ? "Alle sange er allerede på \(Int(target)) LUFS"
@@ -330,7 +336,7 @@ final class LibraryStore: ObservableObject {
 
     func fixAllLoudness() {
         let target = LoudnessPrefs.target
-        fixLoudness(snapshot().tracks.filter { $0.needsLoudnessFix(target: target) }.map(\.id))
+        fixLoudness(snapshot().tracks.filter { $0.needsLoudnessFix(target: target) || $0.needsTrim }.map(\.id))
     }
 
     /// Lægger EQ'en ind i filen (og retter lydstyrken bagefter, så sangen stadig ligger på målet).
@@ -367,7 +373,7 @@ final class LibraryStore: ObservableObject {
         guard let t = snapshot().track(id) else { return }
         var job = ProcessJob(id: id, name: t.title, kind: eq == nil ? "Lydstyrke" : "EQ + lydstyrke", status: .working,
                              before: t.lufs, note: "Behandler …")
-        if eq == nil && !force && !t.needsLoudnessFix(target: target) {
+        if eq == nil && !force && !t.needsLoudnessFix(target: target) && !t.needsTrim {
             job.status = .skipped
             job.after = t.lufs
             job.note = "Allerede klar"
@@ -405,11 +411,13 @@ final class LibraryStore: ObservableObject {
             let clips = Loudness.countClips(srcCh)
             let lufsSrc = Loudness.integratedLUFS(srcCh, sr: sr)
             let peakSrc = Loudness.peakDB(srcCh)
+            let dead = Loudness.deadSpace(srcCh, sr: sr)
+            let trimAt: Double? = dead.dead >= Loudness.deadSpaceMinimum ? dead.musicEnd + Loudness.deadSpaceKeep : nil
             job.before = lufsSrc
             job.clips = clips
             try? beforeEnv.data.write(to: Self.processFolder.appendingPathComponent("\(id.uuidString)-before.bin"))
 
-            if eq == nil && !force && abs(lufsSrc - target) <= 0.5 && clips == 0 && source == url {
+            if eq == nil && !force && abs(lufsSrc - target) <= 0.5 && clips == 0 && source == url && trimAt == nil {
                 job.status = .skipped; job.after = lufsSrc; job.note = "Allerede klar"
                 setJob(job)
                 update(id) { $0.loudnessFixedAt = target; $0.loudnessNote = "Allerede på målet"; $0.originalBackup = backup }
@@ -427,17 +435,20 @@ final class LibraryStore: ObservableObject {
             if lossless {
                 // MP3: tabsfri ændring af global_gain – ingen genkodning
                 let data = try Data(contentsOf: source)
-                let (out, frames) = Loudness.mp3ApplyGain(data, steps: steps)
+                var (out, frames) = Loudness.mp3ApplyGain(data, steps: steps)
                 guard frames > 0 else { throw LoudnessError.failed("Ingen MP3-rammer fundet") }
+                if let cut = trimAt { out = Loudness.mp3Truncate(out, seconds: cut) }
                 let tmp = url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).mp3")
                 try out.write(to: tmp)
                 _ = try fm.replaceItemAt(url, withItemAt: tmp)
                 let g = Float(pow(10, Double(steps) * 1.5 / 20))
-                afterCh = srcCh.map { $0.map { $0 * g } }
+                let kept: [[Float]] = trimAt.map { Loudness.trimPCM(srcCh, sr: sr, at: $0) } ?? srcCh
+                afterCh = kept.map { $0.map { $0 * g } }
                 note = String(format: "%+.1f dB uden genkodning", Double(steps) * 1.5)
             } else {
                 // PCM: (EQ) → klippede toppe genskabes → gain → limiter (top −1 dBFS)
-                let input = eq.map { e in (try? EQRender.render(url: source, eq: e).0) ?? srcCh } ?? srcCh
+                var input = eq.map { e in (try? EQRender.render(url: source, eq: e).0) ?? srcCh } ?? srcCh
+                if let cut = trimAt { input = Loudness.trimPCM(input, sr: sr, at: cut) }
                 let (out, res) = Loudness.normalizePCM(input, sr: sr, target: target, maxLimitingDB: Loudness.maxLimitingDB)
                 limiting = res.limitingDB
                 repaired = res.clipsRepaired
@@ -468,6 +479,10 @@ final class LibraryStore: ObservableObject {
                 if !keepFormat { note += " · gemt som WAV" }
             }
 
+            if trimAt != nil {
+                let secs = Int(dead.dead.rounded())
+                note += String(format: " · %d:%02d død luft fjernet", secs / 60, secs % 60)
+            }
             let afterEnv = Loudness.envelope(afterCh)
             try? afterEnv.data.write(to: Self.processFolder.appendingPathComponent("\(id.uuidString)-after.bin"))
             let m = try? Loudness.measure(url: outURL)
@@ -477,6 +492,7 @@ final class LibraryStore: ObservableObject {
             let lim = limiting
             let rep = repaired
             let before = lufsSrc
+            let trimmedNow = trimAt != nil
             update(id) {
                 if $0.path != newPath {
                     $0.history.append($0.path)
@@ -490,6 +506,7 @@ final class LibraryStore: ObservableObject {
                 $0.originalBackup = backup
                 $0.limitingDB = lim
                 $0.clipsRepaired = rep
+                if trimmedNow { $0.trimmed = true; $0.deadSpace = 0 }
                 if let eq { $0.eqApplied = [eq.low, eq.mid, eq.high] } else if source != url { $0.eqApplied = nil }
                 if !lossless { $0.bitDepth = 24 }
                 if let size { $0.fileSize = size }
@@ -500,7 +517,7 @@ final class LibraryStore: ObservableObject {
             job.clips = max(clips, repaired)
             job.note = finalNote
             setJob(job)
-            if eq != nil || outURL != url { reanalyze([id]) }
+            if eq != nil || outURL != url || trimmedNow { reanalyze([id]) }
         } catch {
             job.status = .failed
             job.note = "Fejl: \(error.localizedDescription) – intet er ændret"
@@ -573,6 +590,8 @@ final class LibraryStore: ObservableObject {
                 $0.loudnessFixedAt = nil
                 $0.loudnessSkip = true
                 $0.eqApplied = nil
+                $0.trimmed = nil
+                if let m { $0.deadSpace = m.deadSpace }
                 $0.limitingDB = nil
                 $0.clipsRepaired = nil
                 $0.loudnessNote = "Original gendannet"

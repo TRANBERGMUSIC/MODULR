@@ -15,10 +15,13 @@ struct MusicAnalysisResult: Equatable {
     var loudnessDB: Double
     /// 3 bytes pr. kolonne (lav, mellem, høj), 150 kolonner pr. sekund.
     var bands: [UInt8]
+    /// Toppe (0–255) i høj opløsning, 600 pr. sekund – til den detaljerede waveform.
+    var peaks: [UInt8] = []
 }
 
 enum MusicAnalyzer {
     static let waveformRate = 150.0
+    static let peakRate = 600.0
 
     // MARK: Dekodning
 
@@ -111,7 +114,11 @@ enum MusicAnalyzer {
         let (x, sr) = try decodeMono(url: url)
         guard x.count > Int(sr * 2) else { throw AnalyzerError.tooShort }
         let duration = Double(x.count) / sr
-        let tempo = estimateTempo(x, sr: sr)
+        var tempo = estimateTempo(x, sr: sr)
+        if tempo.bpm > 0, let g = refineGrid(x, sr: sr, roughBPM: tempo.bpm) {
+            tempo.bpm = g.bpm
+            tempo.firstBeatMs = g.firstBeatMs
+        }
         let key = estimateKey(x, sr: sr)
         let (bands, bandStats) = waveformBands(x, sr: sr)
 
@@ -119,8 +126,29 @@ enum MusicAnalyzer {
         vDSP_rmsqv(x, 1, &rms, vDSP_Length(x.count))
         let loud = 20 * log10(Double(max(rms, 1e-9)))
         let energy = energyRating(loudnessDB: loud, brightness: bandStats.brightness, density: tempo.density)
-        return MusicAnalysisResult(bpm: tempo.bpm, firstBeatMs: tempo.firstBeatMs, key: key, energy: energy,
-                                   duration: duration, loudnessDB: loud, bands: bands)
+        var result = MusicAnalysisResult(bpm: tempo.bpm, firstBeatMs: tempo.firstBeatMs, key: key, energy: energy,
+                                         duration: duration, loudnessDB: loud, bands: bands)
+        result.peaks = peakEnvelope(x, sr: sr)
+        return result
+    }
+
+    /// Højeste udsving pr. 1/600 s (som rekordbox tegner sin detaljerede waveform), normaliseret til 99,9-percentilen.
+    static func peakEnvelope(_ x: [Float], sr: Double) -> [UInt8] {
+        let hop = max(1, Int((sr / peakRate).rounded()))
+        let n = x.count / hop
+        guard n > 0 else { return [] }
+        var raw = [Float](repeating: 0, count: n)
+        x.withUnsafeBufferPointer { p in
+            for i in 0..<n {
+                var m: Float = 0
+                vDSP_maxmgv(p.baseAddress! + i * hop, 1, &m, vDSP_Length(hop))
+                raw[i] = m
+            }
+        }
+        var sorted = raw
+        sorted.sort()
+        let ref = max(1e-6, sorted[min(n - 1, Int(Double(n) * 0.999))])
+        return raw.map { UInt8(min(255, ($0 / ref * 255).rounded())) }
     }
 
     // MARK: Tempo
@@ -269,6 +297,162 @@ enum MusicAnalyzer {
         return Tempo(bpm: bpm, firstBeatMs: max(0, first), density: density)
     }
 
+    // MARK: Præcist grid
+
+    /// Præcist beatgrid som rekordbox: BPM på 0,001 nøjagtigt (rundes til hele tal når det passer),
+    /// slaget sat på selve kick-anslaget (under 1 ms fejl på testnumre) og takt 1 der hvor musikken skifter.
+    /// 1) kick-anslag fra bas-båndet foldes over perioden for hver kandidat-BPM – den skarpeste top vinder;
+    /// 2) fasen findes groft fra kick'et og præcist fra forkanten af det samlede signal (hi-hats på
+    ///    offbeat kan ikke trække griddet en halv takt); 3) takt 1 = det slag i takten med flest skift.
+    static func refineGrid(_ x: [Float], sr: Double, roughBPM: Double) -> (bpm: Double, firstBeatMs: Double)? {
+        let hop = 16
+        let n = x.count / hop
+        guard n > 4000, roughBPM > 0 else { return nil }
+        let low = biquadCascade(x, sections: [rbj(lowpass: true, f0: 150, sr: sr), rbj(lowpass: true, f0: 150, sr: sr)])
+        var eL = [Float](repeating: 0, count: n)
+        var env = [Float](repeating: 0, count: n)
+        low.withUnsafeBufferPointer { lp in
+            x.withUnsafeBufferPointer { xp in
+                for i in 0..<n {
+                    var m: Float = 0
+                    vDSP_measqv(lp.baseAddress! + i * hop, 1, &m, vDSP_Length(hop))
+                    eL[i] = sqrtf(m)
+                    var p: Float = 0
+                    vDSP_maxmgv(xp.baseAddress! + i * hop, 1, &p, vDSP_Length(hop))
+                    env[i] = p
+                }
+            }
+        }
+        // Kick-anslag: stigning i bas-energien. Kun de tydelige punkter bruges (hurtigere og renere).
+        var onsetIdx = [Int]()
+        var onsetVal = [Double]()
+        var maxRise: Float = 0
+        var rise = [Float](repeating: 0, count: n)
+        for i in 1..<n {
+            rise[i] = max(0, eL[i] - eL[i - 1])
+            maxRise = max(maxRise, rise[i])
+        }
+        guard maxRise > 0 else { return nil }
+        for i in 1..<n where rise[i] > maxRise * 0.02 {
+            onsetIdx.append(i)
+            onsetVal.append(Double(rise[i]))
+        }
+        guard onsetIdx.count > 50 else { return nil }
+        let fps = sr / Double(hop)
+        let nb = 1024
+
+        func foldOnsets(_ bpm: Double) -> [Double] {
+            let inv = bpm / (fps * 60)
+            var h = [Double](repeating: 0, count: nb)
+            for j in 0..<onsetIdx.count {
+                let ph = Double(onsetIdx[j]) * inv
+                let b = Int((ph - floor(ph)) * Double(nb)) % nb
+                h[b] += onsetVal[j]
+            }
+            return h
+        }
+        func smooth(_ h: [Double], _ w: Int = 13) -> [Double] {
+            var out = [Double](repeating: 0, count: nb)
+            let r = w / 2
+            var acc = 0.0
+            for o in -r...r { acc += h[(o + nb) % nb] }
+            for i in 0..<nb {
+                out[i] = acc
+                acc += h[(i + r + 1) % nb] - h[(i - r + nb) % nb]
+            }
+            return out
+        }
+        func score(_ bpm: Double) -> Double { smooth(foldOnsets(bpm)).max() ?? 0 }
+
+        // BPM: grov søgning ±0,6 (trin 0,01), så fin ±0,012 (trin 0,001)
+        var best = (score: -1.0, bpm: roughBPM)
+        var c = roughBPM - 0.6
+        while c <= roughBPM + 0.6 {
+            let v = score(c)
+            if v > best.score { best = (v, c) }
+            c += 0.01
+        }
+        var fine = best
+        c = best.bpm - 0.012
+        while c <= best.bpm + 0.012 {
+            let v = score(c)
+            if v > fine.score { fine = (v, c) }
+            c += 0.001
+        }
+        var bpm = fine.bpm
+        let whole = bpm.rounded()
+        if abs(bpm - whole) < 0.05 && score(whole) >= 0.97 * fine.score {
+            bpm = whole
+        } else {
+            bpm = (bpm * 100).rounded() / 100
+        }
+
+        // Fase: groft fra kick'et, præcist fra forkanten af det samlede signal
+        let kick = smooth(foldOnsets(bpm))
+        let kc = kick.indices.max(by: { kick[$0] < kick[$1] }) ?? 0
+        let inv = bpm / (fps * 60)
+        var sum = [Double](repeating: 0, count: nb)
+        var cnt = [Double](repeating: 0, count: nb)
+        for i in 0..<n {
+            let ph = Double(i) * inv
+            let b = Int((ph - floor(ph)) * Double(nb)) % nb
+            sum[b] += Double(env[i])
+            cnt[b] += 1
+        }
+        var h = [Double](repeating: 0, count: nb)
+        for b in 0..<nb { h[b] = sum[b] / max(1, cnt[b]) }
+        let beatSec = 60 / bpm
+        let binSec = beatSec / Double(nb)
+        let win = max(2, Int(0.035 / binSec))
+        var k = kc
+        for o in -win...win where h[(kc + o + nb) % nb] > h[(k + nb) % nb] { k = kc + o }
+        var lowest = Double.infinity
+        for o in (-2 * win)...(2 * win) { lowest = min(lowest, h[(kc + o + nb) % nb]) }
+        let peak = h[(k + nb) % nb]
+        let thr = lowest + 0.2 * (peak - lowest)
+        var j = k
+        for _ in 0..<(2 * win) {
+            if h[(j - 1 + 2 * nb) % nb] < thr { break }
+            j -= 1
+        }
+        let a = h[(j - 1 + 2 * nb) % nb], b = h[(j + 2 * nb) % nb]
+        let frac = b != a ? (thr - a) / (b - a) : 0
+        var edge = (Double(j - 1) + frac) / Double(nb)
+        edge -= floor(edge)
+        let beat0 = edge * beatSec                       // første slag efter 0 s
+
+        // Takt 1: det slag (af 4) hvor bas/mellem/diskant skifter mest fra slaget før til slaget efter
+        let high = biquadCascade(x, sections: [rbj(lowpass: false, f0: 2500, sr: sr), rbj(lowpass: false, f0: 2500, sr: sr)])
+        var midSig = [Float](repeating: 0, count: x.count)
+        for i in 0..<x.count { midSig[i] = x[i] - low[i] - high[i] }
+        let total = Double(x.count) / sr
+        let beats = Int((total - beat0) / beatSec)
+        var downScore = [Double](repeating: 0, count: 4)
+        func bandVector(_ t0: Double, _ t1: Double) -> [Double]? {
+            let s0 = Int(t0 * sr), s1 = Int(t1 * sr)
+            guard s0 >= 0, s1 <= x.count, s1 > s0 else { return nil }
+            var lo: Float = 0, hi: Float = 0, mid: Float = 0
+            let len = vDSP_Length(s1 - s0)
+            low.withUnsafeBufferPointer { p in vDSP_meamgv(p.baseAddress! + s0, 1, &lo, len) }
+            high.withUnsafeBufferPointer { p in vDSP_meamgv(p.baseAddress! + s0, 1, &hi, len) }
+            midSig.withUnsafeBufferPointer { p in vDSP_meamgv(p.baseAddress! + s0, 1, &mid, len) }
+            return [log(Double(lo) + 1e-4), log(Double(mid) + 1e-4), log(Double(hi) + 1e-4)]
+        }
+        if beats > 8 {
+            for kb in 1..<(beats - 1) {
+                let t = beat0 + Double(kb) * beatSec
+                guard let v1 = bandVector(t - beatSec, t), let v2 = bandVector(t, t + beatSec) else { continue }
+                downScore[kb % 4] += abs(v2[0] - v1[0]) + abs(v2[1] - v1[1]) + abs(v2[2] - v1[2])
+            }
+        }
+        var m = 0
+        if let top = downScore.max(), top > 0 {
+            m = downScore.firstIndex(of: top) ?? 0
+            if downScore[0] >= top * 0.99 { m = 0 }      // uafgjort: første kick er takt 1
+        }
+        return (bpm, (beat0 + Double(m) * beatSec) * 1000)
+    }
+
     // MARK: Toneart
 
     static let majorProfile: [Double] = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -336,6 +520,8 @@ enum MusicAnalyzer {
         let mid = biquadCascade(x, sections: [rbj(lowpass: false, f0: 200, sr: sr), rbj(lowpass: false, f0: 200, sr: sr),
                                               rbj(lowpass: true, f0: 2500, sr: sr), rbj(lowpass: true, f0: 2500, sr: sr)])
         let high = biquadCascade(x, sections: [rbj(lowpass: false, f0: 2500, sr: sr), rbj(lowpass: false, f0: 2500, sr: sr)])
+        var midSig = [Float](repeating: 0, count: x.count)
+        for i in 0..<x.count { midSig[i] = x[i] - low[i] - high[i] }
         var raw = [Float](repeating: 0, count: cols * 3)
         var sumHigh = 0.0, sumAll = 0.0
         let signals = [low, mid, high]

@@ -441,12 +441,21 @@ do {
         try write(synth(bpm: bpm, root: root, minor: minor, offsetMs: 137), to: url, settings: wavSettings)
         let r = try MusicAnalyzer.analyze(url: url)
         let want = MusicalKey(pitchClass: root, minor: minor)
-        check("BPM \(Int(bpm))", abs(r.bpm - bpm) < 0.6, "målt \(r.bpm)")
+        check("BPM \(Int(bpm)) præcist", abs(r.bpm - bpm) < 0.01, "målt \(r.bpm)")
         check("Toneart \(want.camelot)", r.key == want, "målt \(r.key?.camelot ?? "-")")
-        check("Første slag ≈ 137 ms", abs(r.firstBeatMs - 137) < 30, "målt \(Int(r.firstBeatMs)) ms")
+        check("Første slag på 137 ms (±3 ms)", abs(r.firstBeatMs - 137) < 3, String(format: "målt %.1f ms", r.firstBeatMs))
+        check("Toppe 600/s", abs(Double(r.peaks.count) - r.duration * 600) < 700)
         check("Waveform 150 kolonner/s", abs(Double(r.bands.count / 3) - r.duration * 150) < 300)
         check("Energi 1–10", (1...10).contains(r.energy))
     }
+    // Skæv BPM og andet første slag
+    let odd = tmp.appendingPathComponent("music-126-5.wav")
+    try write(synth(bpm: 126.5, root: 2, minor: true, offsetMs: 310), to: odd, settings: wavSettings)
+    let ro = try MusicAnalyzer.analyze(url: odd)
+    check("BPM 126,50 præcist", abs(ro.bpm - 126.5) < 0.011, "målt \(ro.bpm)")
+    let beatMs = 60000 / 126.5
+    let errMs = (ro.firstBeatMs - 310).truncatingRemainder(dividingBy: beatMs)
+    check("Grid på slaget ved 126,5 BPM (±3 ms)", min(abs(errMs), beatMs - abs(errMs)) < 3, String(format: "målt %.1f ms", ro.firstBeatMs))
 } catch {
     check("Musikanalyse kørte", false, error.localizedDescription)
 }
@@ -639,6 +648,18 @@ do {
     }
     if let c = WaveColor.rgb(0, 255, 0) { check("Mellem alene er grøn", abs(c.g - 1) < 1e-9 && c.r < 0.4) }
     check("Stilhed giver ingen farve", WaveColor.rgb(0, 0, 0) == nil)
+
+    // Død luft: 30 s musik + 6 min stilhed → klippes ved musikkens slutning
+    let srD = 8000.0
+    var song = [Float](repeating: 0, count: Int(srD * (30 + 360)))
+    for i in 0..<Int(srD * 30) { song[i] = Float(0.5 * sin(2 * .pi * 220 * Double(i) / srD)) }
+    let dead = Loudness.deadSpace([song], sr: srD)
+    check("Død luft findes (6 min)", abs(dead.dead - 360) < 0.5 && abs(dead.musicEnd - 30) < 0.2, "\(dead)")
+    let trimmed = Loudness.trimPCM([song], sr: srD, at: dead.musicEnd + Loudness.deadSpaceKeep)
+    check("Klippet til 31,5 s", abs(Double(trimmed[0].count) / srD - 31.5) < 0.01)
+    check("Udtoning til sidst (intet klik)", abs(trimmed[0].last ?? 1) < 0.01)
+    let shortTail = Loudness.deadSpace([Array(song[0..<Int(srD * 40)])], sr: srD)
+    check("10 s udløb er ikke død luft", shortTail.dead < Loudness.deadSpaceMinimum)
 }
 
 try? FileManager.default.removeItem(at: tmp)

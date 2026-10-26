@@ -29,7 +29,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var artFile: String?          // cover (JPEG)
     var hasWave: Bool
     var waveVersion: Int?
-    static let currentWaveVersion = 3
+    static let currentWaveVersion = 5
     var addedAt: Date
     var analyzed: Bool
     var analysisError: String?
@@ -47,6 +47,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var clipsRepaired: Int?
     var limitingDB: Double?
     var cues: [Double]?           // dine markeringer (sekunder) til at planlægge sættet
+    var deadSpace: Double?        // sekunders stilhed til sidst
+    var trimmed: Bool?            // død luft er fjernet
 
     var url: URL { URL(fileURLWithPath: path) }
     var fileName: String { url.lastPathComponent }
@@ -77,7 +79,10 @@ struct LibTrack: Codable, Identifiable, Equatable {
         return abs(l - target) > 1.0
     }
 
-    var needsFix: Bool { needsUpgrade || needsLoudnessFix(target: LoudnessPrefs.target) }
+    /// 5–7 min ekstra stilhed til sidst (mod copyright-scanning) skal klippes væk.
+    var needsTrim: Bool { (deadSpace ?? 0) >= 20 && trimmed != true && loudnessSkip != true }
+
+    var needsFix: Bool { needsUpgrade || needsLoudnessFix(target: LoudnessPrefs.target) || needsTrim }
 
     mutating func resetLoudness() {
         lufs = nil

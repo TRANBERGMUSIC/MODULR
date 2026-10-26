@@ -11,6 +11,8 @@ import Accelerate
 struct LoudnessMeasurement: Equatable {
     var lufs: Double
     var peakDB: Double
+    var deadSpace: Double = 0      // sekunders stilhed til sidst (fx 5–7 min ekstra mod copyright-scanning)
+    var musicEnd: Double = 0
 }
 
 struct LoudnessFixResult: Equatable {
@@ -155,7 +157,110 @@ enum Loudness {
 
     static func measure(url: URL) throws -> LoudnessMeasurement {
         let (ch, sr) = try read(url: url)
-        return LoudnessMeasurement(lufs: integratedLUFS(ch, sr: sr), peakDB: peakDB(ch))
+        let dead = deadSpace(ch, sr: sr)
+        return LoudnessMeasurement(lufs: integratedLUFS(ch, sr: sr), peakDB: peakDB(ch), deadSpace: dead.dead, musicEnd: dead.musicEnd)
+    }
+
+    // MARK: Død luft til sidst
+
+    static let deadSpaceMinimum = 20.0     // kortere stilhed er et naturligt udløb – røres ikke
+    static let deadSpaceKeep = 1.5         // så meget efter sidste lyd beholdes (rumklang)
+
+    /// Hvor musikken slutter (sidste 100 ms-blok over −50 dBFS) og hvor meget stilhed der følger.
+    static func deadSpace(_ channels: [[Float]], sr: Double) -> (musicEnd: Double, dead: Double) {
+        let n = channels.first?.count ?? 0
+        guard n > 0 else { return (0, 0) }
+        let block = max(1, Int(sr * 0.1))
+        let thr: Float = 0.00316            // −50 dBFS
+        var lastLoud = -1
+        var b = (n - 1) / block
+        while b >= 0 {
+            let a = b * block
+            let len = min(block, n - a)
+            var m: Float = 0
+            for ch in channels {
+                var v: Float = 0
+                ch.withUnsafeBufferPointer { p in vDSP_maxmgv(p.baseAddress! + a, 1, &v, vDSP_Length(len)) }
+                m = max(m, v)
+            }
+            if m > thr { lastLoud = b; break }
+            b -= 1
+        }
+        let duration = Double(n) / sr
+        let end = lastLoud < 0 ? 0 : min(duration, Double(lastLoud + 1) * 0.1)
+        return (end, max(0, duration - end))
+    }
+
+    /// Klipper PCM ved `seconds` med en kort udtoning (30 ms), så der ikke kommer et klik.
+    static func trimPCM(_ channels: [[Float]], sr: Double, at seconds: Double) -> [[Float]] {
+        let n = channels.first?.count ?? 0
+        let keep = max(1, min(n, Int(seconds * sr)))
+        let fade = min(keep, Int(sr * 0.03))
+        return channels.map { ch in
+            var y = Array(ch[0..<keep])
+            for i in 0..<fade {
+                y[keep - fade + i] *= Float(fade - i) / Float(fade)
+            }
+            return y
+        }
+    }
+
+    /// MP3 klippes tabsfrit: hele rammer efter `seconds` fjernes, og længden i Xing/Info-headeren rettes.
+    static func mp3Truncate(_ input: Data, seconds: Double) -> Data {
+        var d = [UInt8](input)
+        let bitrates1: [Int] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+        let bitrates2: [Int] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+        let rates: [Int: [Int]] = [1: [44100, 48000, 32000], 2: [22050, 24000, 16000], 25: [11025, 12000, 8000]]
+        var pos = id3Length(d)
+        var end = d.count
+        var v1 = [UInt8]()
+        if end >= 128, d[end - 128] == 0x54, d[end - 127] == 0x41, d[end - 126] == 0x47 {
+            v1 = Array(d[(end - 128)...])
+            end -= 128
+        }
+        var t = 0.0
+        var frames = 0
+        var first: (pos: Int, len: Int)?
+        var cut: Int?
+        while pos + 4 <= end {
+            let h = (UInt32(d[pos]) << 24) | (UInt32(d[pos + 1]) << 16) | (UInt32(d[pos + 2]) << 8) | UInt32(d[pos + 3])
+            guard (h >> 21) & 0x7FF == 0x7FF else { pos += 1; continue }
+            let ver = Int((h >> 19) & 3), layer = Int((h >> 17) & 3)
+            let bri = Int((h >> 12) & 15), sri = Int((h >> 10) & 3), pad = Int((h >> 9) & 1)
+            guard layer == 1, ver != 1, bri != 0, bri != 15, sri != 3 else { pos += 1; continue }
+            let mpeg = ver == 3 ? 1 : (ver == 2 ? 2 : 25)
+            let br = (mpeg == 1 ? bitrates1[bri] : bitrates2[bri]) * 1000
+            let sr = rates[mpeg]![sri]
+            let flen = (mpeg == 1 ? 144 * br / sr : 72 * br / sr) + pad
+            guard flen >= 4, pos + flen <= end else { break }
+            if first == nil { first = (pos, flen) }
+            if t >= seconds { cut = pos; break }
+            t += Double(mpeg == 1 ? 1152 : 576) / Double(sr)
+            frames += 1
+            pos += flen
+        }
+        let cutAt = cut ?? pos
+        guard cutAt < end else { return input }       // intet at klippe
+        d = Array(d[0..<cutAt])
+        if let f = first, f.pos + f.len <= d.count {
+            // Xing/Info-header i første ramme: antal rammer og bytes
+            let blk = Array(d[f.pos..<(f.pos + f.len)])
+            for tag in [[UInt8]("Xing".utf8), [UInt8]("Info".utf8)] {
+                guard blk.count > 16, let o = (0...(blk.count - 12)).first(where: { Array(blk[$0..<($0 + 4)]) == tag }) else { continue }
+                let base = f.pos + o
+                let flags = (Int(d[base + 4]) << 24) | (Int(d[base + 5]) << 16) | (Int(d[base + 6]) << 8) | Int(d[base + 7])
+                var q = base + 8
+                func put(_ v: Int) {
+                    d[q] = UInt8((v >> 24) & 0xFF); d[q + 1] = UInt8((v >> 16) & 0xFF)
+                    d[q + 2] = UInt8((v >> 8) & 0xFF); d[q + 3] = UInt8(v & 0xFF)
+                    q += 4
+                }
+                if flags & 1 != 0, q + 4 <= d.count { put(frames - 1) }
+                if flags & 2 != 0, q + 4 <= d.count { put(cutAt - f.pos) }
+                break
+            }
+        }
+        return Data(d + v1)
     }
 
     // MARK: Klippede toppe

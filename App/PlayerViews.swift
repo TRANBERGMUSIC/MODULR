@@ -30,7 +30,10 @@ struct PlayerPanel: View {
                     } else {
                         DetailWaveform(track: t, zoom: $zoom, gridMode: mode == .grid)
                             .frame(height: 104)
-                        OverviewWaveform(track: t, zoom: zoom).frame(height: 30)
+                        VStack(spacing: 2) {
+                            OverviewWaveform(track: t, zoom: zoom).frame(height: 30)
+                            BarRuler(track: t).frame(height: 14)
+                        }
                         switch mode {
                         case .grid: GridEditBar(track: t)
                         case .eq: EQPanel(track: t)
@@ -60,13 +63,20 @@ struct PlayerPanel: View {
                 Text(t.bpmText).font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundColor(.mist)
                     .fixedSize()
                 LevelMeter()
-                    .frame(width: 120, height: 14)
+                    .frame(width: 96, height: 14)
                 if !compact {
                     ModSegmented(selection: $mode, options: [(PlayerMode.play, "Afspil"), (PlayerMode.grid, "Grid"),
                                                              (PlayerMode.cues, "Cues"), (PlayerMode.eq, "EQ")])
-                        .frame(width: 236)
+                        .fixedSize()
                 }
             }
+            Button { player.previous() } label: {
+                Image(systemName: "backward.fill").font(.system(size: 12, weight: .bold)).foregroundColor(.mist.opacity(0.8))
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(t == nil)
+            .help("Forrige sang (eller starten af sangen)")
             Button {
                 player.toggle()
             } label: {
@@ -78,6 +88,14 @@ struct PlayerPanel: View {
             }
             .buttonStyle(.plain)
             .disabled(t == nil)
+            .help("Afspil/pause (mellemrum)")
+            Button { player.next() } label: {
+                Image(systemName: "forward.fill").font(.system(size: 12, weight: .bold)).foregroundColor(.mist.opacity(0.8))
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(t == nil)
+            .help("Næste sang")
         }
     }
 }
@@ -94,6 +112,7 @@ struct DetailWaveform: View {
     @State private var gridShift: Double = 0
     @State private var zoomBase: Double?
     @State private var hover = false
+    @Environment(\.displayScale) private var scale
 
     static let zoomSteps: [Double] = [2, 4, 8, 16, 32, 64]
 
@@ -171,17 +190,13 @@ struct DetailWaveform: View {
     }
 
     func drag(width: Double) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        DragGesture(minimumDistance: 3)
             .onChanged { v in
                 let secsPerPx = zoom / max(1, width)
                 if gridMode {
                     gridShift = Double(v.translation.width) * secsPerPx
                 } else {
-                    if dragStart == nil {
-                        dragStart = player.position
-                        wasPlaying = player.playing
-                        if wasPlaying { player.pause() }
-                    }
+                    if dragStart == nil { dragStart = player.position }
                     player.seek(seconds: (dragStart ?? 0) - Double(v.translation.width) * secsPerPx)
                 }
             }
@@ -193,7 +208,6 @@ struct DetailWaveform: View {
                     }
                     gridShift = 0
                 } else {
-                    if wasPlaying { player.play() }
                     dragStart = nil
                 }
             }
@@ -206,12 +220,68 @@ struct DetailWaveform: View {
         let t0 = player.position - zoom / 2
         let mid = h / 2
 
-        // 1) Beatgrid bag waveformen – diskret: hårfine slag, lidt tydeligere takter, tynd orange frase
+        // 2) Waveformen som i rekordbox: toppe i høj opløsning, én skærm-pixel ad gangen, farven fra
+        //    frekvensbåndene (bas rød, mellem grøn, diskant blå). Ingen udglatning – transienterne står skarpt.
+        let peaks = player.peaks
+        if bands.count >= 3 {
+            let s = max(1, Double(scale))
+            let px = 1 / s
+            let n = Int(w * s)
+            let halfH = h / 2 - 3
+            let rate = MusicAnalyzer.waveformRate
+            let prate = MusicAnalyzer.peakRate
+            let pcount = peaks.count
+            let levels = 8.0
+            var paths = [Int: Path]()
+            for i in 0..<n {
+                let x = Double(i) * px
+                let ta = t0 + x * secsPerPx
+                let tb = ta + px * secsPerPx
+                if tb <= 0 || ta >= player.duration { continue }
+                // Højde: største top i pixlens tidsrum (eller nærmeste top, når der er zoomet langt ind)
+                var amp = 0.0
+                if pcount > 0 {
+                    let a = max(0, Int(ta * prate))
+                    let b = min(pcount, max(a + 1, Int(ceil(tb * prate))))
+                    if a < pcount {
+                        for k in a..<b { amp = max(amp, Double(peaks[k])) }
+                    }
+                } else {
+                    let col = ta * rate
+                    amp = max(WaveColor.sample(bands, at: col, band: 0),
+                              max(WaveColor.sample(bands, at: col, band: 1), WaveColor.sample(bands, at: col, band: 2)))
+                }
+                if amp < 1 { continue }
+                let col = (ta + tb) / 2 * rate
+                let lo = WaveColor.sample(bands, at: col, band: 0)
+                let mi = WaveColor.sample(bands, at: col, band: 1)
+                let hi = WaveColor.sample(bands, at: col, band: 2)
+                guard let c = WaveColor.rgb(lo, mi, hi, floor: 0.1) else { continue }
+                // Farverne samles i spande, så hele waveformen tegnes med få fyld-kald
+                let key = Int((c.r * (levels - 1)).rounded()) * 100 + Int((c.g * (levels - 1)).rounded()) * 10
+                    + Int((c.b * (levels - 1)).rounded())
+                let bh = amp / 255 * halfH
+                paths[key, default: Path()].addRect(CGRect(x: x, y: mid - bh, width: px, height: bh * 2))
+            }
+            for (key, path) in paths {
+                let r = Double(key / 100) / (levels - 1)
+                let g = Double((key / 10) % 10) / (levels - 1)
+                let b = Double(key % 10) / (levels - 1)
+                ctx.fill(path, with: .color(Color(red: r, green: g, blue: b)))
+            }
+        } else {
+            ctx.draw(Text(PlayerModel.shared.analyzingWave ? "Analyserer waveform …" : "Ingen waveform")
+                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.5)),
+                     at: CGPoint(x: w / 2, y: mid))
+        }
+
+        // Beatgrid oven på waveformen (så det ses præcist hvor slaget rammer, også zoomet ind)
         if let bpm = track.bpm, bpm > 0 {
             let beat = 60 / bpm
             let fb = firstBeat
             var k = Int(floor((t0 - fb) / beat))
             let pxPerBeat = beat / secsPerPx
+            let line = 1 / max(1, Double(scale))
             while true {
                 let tb = fb + Double(k) * beat
                 if tb > t0 + zoom { break }
@@ -220,40 +290,25 @@ struct DetailWaveform: View {
                     let inBar = BeatGrid.mod(k, BeatGrid.beatsPerBar)
                     let inPhrase = BeatGrid.mod(k, BeatGrid.beatsPerBar * BeatGrid.barsPerPhrase)
                     if inPhrase == 0 {
-                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(Color.ember.opacity(0.75)))
+                        ctx.fill(Path(CGRect(x: x - line, y: 0, width: line * 2, height: h)), with: .color(Color.ember.opacity(0.9)))
                         let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
-                        ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember.opacity(0.9)),
+                        ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember),
                                  at: CGPoint(x: x + 3, y: h - 7), anchor: .leading)
                     } else if inBar == 0 {
-                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(Color.white.opacity(0.22)))
-                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: 5)), with: .color(Color.white.opacity(0.6)))
-                        ctx.fill(Path(CGRect(x: x - 0.5, y: h - 5, width: 1, height: 5)), with: .color(Color.white.opacity(0.6)))
+                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.75)))
                     } else if pxPerBeat > 6 {
-                        ctx.fill(Path(CGRect(x: x - 0.25, y: 0, width: 0.5, height: h)), with: .color(Color.white.opacity(0.1)))
+                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.4)))
+                    }
+                    // Små markeringer øverst og nederst på hvert slag (som rekordbox)
+                    if pxPerBeat > 4 || inBar == 0 {
+                        let tick: Double = inBar == 0 ? 5 : 3
+                        let col: Color = inBar == 0 ? Color(red: 0.95, green: 0.3, blue: 0.25) : Color.white.opacity(0.7)
+                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: tick)), with: .color(col))
+                        ctx.fill(Path(CGRect(x: x - 1, y: h - tick, width: 2, height: tick)), with: .color(col))
                     }
                 }
                 k += 1
             }
-        }
-
-        // 2) Waveformen som én blød, kantudglattet form med glidende farver (som rekordbox)
-        if bands.count >= 3 {
-            let halfH = h / 2 - 6
-            let profile = WaveShape.profile(bands, from: t0, secondsPerPoint: secsPerPx, count: Int(w) + 1,
-                                            duration: player.duration, floor: 0.08)
-            let playedX = w / 2
-            if let shape = WaveShape.path(profile, step: 1, mid: mid, halfHeight: halfH) {
-                let gradient = WaveShape.gradient(profile, every: 3, dimBefore: playedX / max(1, w), dim: 0.82)
-                ctx.fill(shape, with: .linearGradient(gradient, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: w, y: 0)))
-                // Lysere kerne giver dybde
-                if let core = WaveShape.path(profile, step: 1, mid: mid, halfHeight: halfH * 0.42) {
-                    ctx.fill(core, with: .color(Color.white.opacity(0.16)))
-                }
-            }
-        } else {
-            ctx.draw(Text(PlayerModel.shared.analyzingWave ? "Analyserer waveform …" : "Ingen waveform")
-                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.5)),
-                     at: CGPoint(x: w / 2, y: mid))
         }
 
         // 3) Dine markører (cues)
@@ -335,12 +390,56 @@ struct OverviewWaveform: View {
     func timeText(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
 }
 
+// MARK: - Takt-lineal under overblikket (som rekordbox)
+
+struct BarRuler: View {
+    @ObservedObject private var player = PlayerModel.shared
+    let track: LibTrack
+
+    var body: some View {
+        Canvas { ctx, size in
+            let w = Double(size.width), h = Double(size.height)
+            let dur = max(0.001, player.duration)
+            guard w > 10, let bpm = track.bpm, bpm > 0 else { return }
+            let barSec = 60 / bpm * Double(BeatGrid.beatsPerBar)
+            let fb = (track.firstBeatMs ?? 0) / 1000
+            let totalBars = Int((dur - fb) / barSec) + 1
+            guard totalBars > 0 else { return }
+            let pxPerBar = w * barSec / dur
+            // Tal med mindst ~36 px imellem: hver 8., 16., 32. … takt
+            var labelEvery = 8
+            while Double(labelEvery) * pxPerBar < 36 && labelEvery < 4096 { labelEvery *= 2 }
+            let tickEvery = pxPerBar >= 5 ? 1 : (pxPerBar * 4 >= 5 ? 4 : 8)
+            var bar = 0
+            while bar < totalBars {
+                let t = fb + Double(bar) * barSec
+                let x = t / dur * w
+                if bar % labelEvery == 0 {
+                    ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: 6)), with: .color(Color.mist.opacity(0.6)))
+                    ctx.draw(Text("\(bar + 1)").font(.system(size: 10)).monospacedDigit().foregroundColor(Color.mist.opacity(0.6)),
+                             at: CGPoint(x: x + 2, y: h - 5), anchor: .leading)
+                } else if bar % BeatGrid.barsPerPhrase == 0 {
+                    ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: 4)), with: .color(Color.mist.opacity(0.4)))
+                } else if bar % tickEvery == 0 {
+                    ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: 2)), with: .color(Color.mist.opacity(0.25)))
+                }
+                bar += 1
+            }
+            // Hvor du er
+            let px = player.position / dur * w
+            ctx.fill(Path(CGRect(x: px - 0.5, y: 0, width: 1, height: h)), with: .color(Color.white.opacity(0.8)))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Niveaumåler (som rekordbox: to tynde vandrette bjælker, grøn → orange)
 
 struct LevelMeter: View {
     @ObservedObject private var player = PlayerModel.shared
-    static let minDB = -36.0
-    static let maxDB = 0.0
+    // RMS-skala: et normalt klubmaster (−9 LUFS) ligger omkring −10 dBFS = grønt med orange spids
+    static let minDB = -40.0
+    static let maxDB = -2.0
 
     static func frac(_ db: Double) -> Double { max(0, min(1, (db - minDB) / (maxDB - minDB))) }
 
@@ -356,9 +455,9 @@ struct LevelMeter: View {
             let y0 = (Double(size.height) - barH * 2 - gap) / 2
             let gradient = Gradient(stops: [
                 .init(color: Color(red: 0.25, green: 0.75, blue: 0.35), location: 0),
-                .init(color: Color(red: 0.25, green: 0.75, blue: 0.35), location: 0.62),
-                .init(color: Color(red: 0.95, green: 0.62, blue: 0.2), location: 0.9),
-                .init(color: Color(red: 1, green: 0.25, blue: 0.2), location: 1)
+                .init(color: Color(red: 0.25, green: 0.75, blue: 0.35), location: 0.68),
+                .init(color: Color(red: 0.95, green: 0.62, blue: 0.2), location: 0.92),
+                .init(color: Color(red: 1, green: 0.4, blue: 0.2), location: 1)
             ])
             for (i, v) in [l, r].enumerated() {
                 let y = y0 + Double(i) * (barH + gap)
@@ -379,8 +478,8 @@ struct LevelMeter: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { player.resetClip() }
-        .help(String(format: "Niveau efter EQ: top %.1f dBFS. Orange = tæt på 0, rød kant = klippet (klik for at nulstille).",
-                     player.holdDB))
+        .help(String(format: "Niveau (RMS) %.1f dBFS · højeste top %.1f dBFS. Rød kant = sangen klipper (klik for at nulstille).",
+                     max(player.levelL, player.levelR), player.peakDB))
     }
 }
 

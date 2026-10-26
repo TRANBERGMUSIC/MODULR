@@ -6,6 +6,8 @@ import Foundation
 import AVFoundation
 import Accelerate
 import SwiftUI
+import AppKit
+import MediaPlayer
 
 struct EQSettings: Codable, Equatable {
     var low: Double = 0      // dB, lav shelf 100 Hz
@@ -40,20 +42,28 @@ struct EQSettings: Codable, Equatable {
 /// Lås-beskyttet opsamling fra lyd-tråden (tap'en) til skærmen.
 final class MeterBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var peakL: Float = 0
-    private var peakR: Float = 0
+    private var sumL: Double = 0
+    private var sumR: Double = 0
+    private var count: Double = 0
+    private var peak: Float = 0
+    private var clip = false
 
-    func add(_ l: Float, _ r: Float) {
+    /// rms² pr. kanal (vægtet med antal samples), største top, og om der var ægte klip.
+    func add(msL: Float, msR: Float, frames: Int, peak p: Float, clipped: Bool) {
         lock.lock()
-        peakL = max(peakL, l)
-        peakR = max(peakR, r)
+        sumL += Double(msL) * Double(frames)
+        sumR += Double(msR) * Double(frames)
+        count += Double(frames)
+        peak = max(peak, p)
+        if clipped { clip = true }
         lock.unlock()
     }
 
-    func take() -> (Float, Float) {
+    func take() -> (rmsL: Float, rmsR: Float, peak: Float, clipped: Bool) {
         lock.lock()
-        defer { peakL = 0; peakR = 0; lock.unlock() }
-        return (peakL, peakR)
+        defer { sumL = 0; sumR = 0; count = 0; peak = 0; clip = false; lock.unlock() }
+        guard count > 0 else { return (0, 0, peak, clip) }
+        return (Float((sumL / count).squareRoot()), Float((sumR / count).squareRoot()), peak, clip)
     }
 }
 
@@ -65,6 +75,7 @@ final class PlayerModel: ObservableObject {
     @Published var position: Double = 0
     @Published var duration: Double = 0
     @Published private(set) var bands: [UInt8] = []
+    @Published private(set) var peaks: [UInt8] = []
     @Published private(set) var externalArt: URL?      // cover for sange uden for biblioteket (fx fra USB)
     @Published private(set) var analyzingWave = false
     private var externalOverview: CGImage?
@@ -85,6 +96,7 @@ final class PlayerModel: ObservableObject {
     @Published var levelR: Double = -80
     @Published var holdDB: Double = -80
     @Published var clipped = false
+    @Published var peakDB: Double = -80     // højeste top (til tooltip)
 
     @Published var eq = EQSettings() { didSet { eq.configure(eqUnit) } }
     @Published var volume: Double = 0.85 { didSet { engine.mainMixerNode.outputVolume = Float(volume) } }
@@ -101,11 +113,101 @@ final class PlayerModel: ObservableObject {
     private var holdUntil = Date.distantPast
     private var tapInstalled = false
 
+    private var keyMonitor: Any?
+
     init() {
         engine.attach(node)
         engine.attach(eqUnit)
         EQSettings().configure(eqUnit)
         engine.mainMixerNode.outputVolume = Float(volume)
+        setupRemoteCommands()
+        // Mellemrum = afspil/pause (men ikke når du skriver i et tekstfelt eller en dialog er åben)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, e.keyCode == 49,
+                  e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return e }
+            if let r = NSApp.keyWindow?.firstResponder, r is NSText || r is NSTextView { return e }
+            if Dialogs.shared.current != nil || self.track == nil { return e }
+            self.toggle()
+            return nil
+        }
+    }
+
+    // MARK: Mediataster (afspil/pause, næste, forrige) og "Spiller nu" i macOS
+
+    private func setupRemoteCommands() {
+        let c = MPRemoteCommandCenter.shared()
+        c.playCommand.addTarget { [weak self] _ in
+            guard let self, self.track != nil else { return .noActionableNowPlayingItem }
+            DispatchQueue.main.async { self.play() }
+            return .success
+        }
+        c.pauseCommand.addTarget { [weak self] _ in
+            DispatchQueue.main.async { self?.pause() }
+            return .success
+        }
+        c.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self, self.track != nil else { return .noActionableNowPlayingItem }
+            DispatchQueue.main.async { self.toggle() }
+            return .success
+        }
+        c.nextTrackCommand.addTarget { [weak self] _ in
+            DispatchQueue.main.async { self?.next() }
+            return .success
+        }
+        c.previousTrackCommand.addTarget { [weak self] _ in
+            DispatchQueue.main.async { self?.previous() }
+            return .success
+        }
+        c.changePlaybackPositionCommand.addTarget { [weak self] ev in
+            guard let e = ev as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            DispatchQueue.main.async { self?.seek(seconds: e.positionTime) }
+            return .success
+        }
+    }
+
+    func updateNowPlaying() {
+        let center = MPNowPlayingInfoCenter.default()
+        guard let t = track else {
+            center.nowPlayingInfo = nil
+            center.playbackState = .stopped
+            return
+        }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: t.title,
+            MPMediaItemPropertyArtist: t.artist,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,
+        ]
+        let artURL: URL? = LibraryStore.shared.artURL(t) ?? externalArt
+        if let u = artURL, let img = NSImage(contentsOf: u) {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: img.size) { _ in img }
+        }
+        center.nowPlayingInfo = info
+        center.playbackState = playing ? .playing : .paused
+    }
+
+    /// Næste sang i listen.
+    func next() {
+        guard let cur = track, let i = listQueue.firstIndex(where: { $0.id == cur.id }), i + 1 < listQueue.count else { return }
+        let n = listQueue[i + 1]
+        load(LibraryStore.shared.index.track(n.id) ?? n, autoplay: true, art: listArt[n.id])
+        advancedTo = n.id
+    }
+
+    /// Forrige sang – eller starten af sangen, hvis der er spillet mere end 3 sekunder.
+    func previous() {
+        if position > 3 || track == nil {
+            seek(seconds: 0)
+            return
+        }
+        guard let cur = track, let i = listQueue.firstIndex(where: { $0.id == cur.id }), i > 0 else {
+            seek(seconds: 0)
+            return
+        }
+        let p = listQueue[i - 1]
+        load(LibraryStore.shared.index.track(p.id) ?? p, autoplay: true, art: listArt[p.id])
+        advancedTo = p.id
     }
 
     /// Sangen som den ser ud i biblioteket lige nu (grid og BPM kan være rettet siden den blev indlæst).
@@ -122,7 +224,8 @@ final class PlayerModel: ObservableObject {
         externalArt = art
         externalOverview = nil
         bands = LibraryStore.shared.bands(t)
-        if bands.isEmpty { analyzeWave(t) }
+        peaks = LibraryStore.shared.peaks(t)
+        if bands.isEmpty || peaks.isEmpty { analyzeWave(t) }
         eq = EQSettings()
         clipped = false
         holdDB = -80
@@ -152,6 +255,7 @@ final class PlayerModel: ObservableObject {
                 self.analyzingWave = false
                 guard let r = result else { return }
                 self.bands = r.bands
+                self.peaks = r.peaks
                 self.externalOverview = WaveformCache.render(bands: r.bands, width: 2400, height: 80)
                 if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
                     self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
@@ -172,7 +276,10 @@ final class PlayerModel: ObservableObject {
 
     /// Opdaterer waveform-data (efter ny analyse).
     func refreshBands() {
-        if let t = liveTrack { bands = LibraryStore.shared.bands(t) }
+        if let t = liveTrack {
+            bands = LibraryStore.shared.bands(t)
+            peaks = LibraryStore.shared.peaks(t)
+        }
     }
 
     private func connect(format: AVAudioFormat) {
@@ -188,12 +295,27 @@ final class PlayerModel: ObservableObject {
         let box = meter
         eqUnit.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
             guard let d = buf.floatChannelData else { return }
-            let n = vDSP_Length(buf.frameLength)
-            var l: Float = 0
-            vDSP_maxmgv(d[0], 1, &l, n)
-            var r: Float = l
-            if buf.format.channelCount > 1 { vDSP_maxmgv(d[1], 1, &r, n) }
-            box.add(l, r)
+            let frames = Int(buf.frameLength)
+            let n = vDSP_Length(frames)
+            let chans = min(2, Int(buf.format.channelCount))
+            var ms: [Float] = [0, 0]
+            var peak: Float = 0
+            var clipped = false
+            for c in 0..<chans {
+                vDSP_measqv(d[c], 1, &ms[c], n)
+                var p: Float = 0
+                vDSP_maxmgv(d[c], 1, &p, n)
+                peak = max(peak, p)
+                // Ægte klip: mindst 3 samples i træk på/over 0 dBFS (ikke en enkelt top der rører loftet)
+                if p >= 0.999 {
+                    var run = 0
+                    for i in 0..<frames {
+                        if abs(d[c][i]) >= 0.999 { run += 1; if run >= 3 { clipped = true; break } } else { run = 0 }
+                    }
+                }
+            }
+            if chans == 1 { ms[1] = ms[0] }
+            box.add(msL: ms[0], msR: ms[1], frames: frames, peak: peak, clipped: clipped)
         }
         tapInstalled = true
         engine.prepare()
@@ -209,6 +331,7 @@ final class PlayerModel: ObservableObject {
         node.play()
         playing = true
         startTimer()
+        updateNowPlaying()
     }
 
     func pause() {
@@ -217,6 +340,7 @@ final class PlayerModel: ObservableObject {
         position = Double(startFrame) / sampleRate
         stopNode()
         playing = false
+        updateNowPlaying()
     }
 
     func toggle() { playing ? pause() : play() }
@@ -235,6 +359,7 @@ final class PlayerModel: ObservableObject {
             schedule(from: startFrame)
             node.play()
         }
+        updateNowPlaying()
     }
 
     func stop() {
@@ -307,19 +432,20 @@ final class PlayerModel: ObservableObject {
 
     private func tick() {
         if playing { position = currentTime() }
-        let (l, r) = meter.take()
+        let m = meter.take()
         func db(_ v: Float) -> Double { v > 0 ? 20 * log10(Double(v)) : -80 }
-        let dl = playing ? db(l) : -80
-        let dr = playing ? db(r) : -80
-        // Hurtigt op, roligt ned (ca. 24 dB/s)
-        levelL = dl > levelL ? dl : max(dl, levelL - 0.8)
-        levelR = dr > levelR ? dr : max(dr, levelR - 0.8)
-        let peak = max(dl, dr)
-        if peak >= holdDB || Date() > holdUntil {
-            holdDB = peak >= holdDB ? peak : max(peak, holdDB - 0.5)
-            if peak >= holdDB { holdUntil = Date().addingTimeInterval(1.5) }
+        // Måleren viser lydniveauet (RMS, som rekordbox' kanal-målere), ikke enkelte toppe
+        let dl = playing ? db(m.rmsL) : -80
+        let dr = playing ? db(m.rmsR) : -80
+        levelL = dl > levelL ? dl : max(dl, levelL - 0.6)
+        levelR = dr > levelR ? dr : max(dr, levelR - 0.6)
+        let lvl = max(levelL, levelR)
+        if lvl >= holdDB || Date() > holdUntil {
+            if lvl >= holdDB { holdUntil = Date().addingTimeInterval(1.5) }
+            holdDB = lvl >= holdDB ? lvl : max(lvl, holdDB - 0.4)
         }
-        if max(l, r) >= 1.0 { clipped = true }
+        if playing { peakDB = max(db(m.peak), peakDB - 0.3) } else { peakDB = -80 }
+        if m.clipped { clipped = true }
         if !playing && levelL <= -79 && levelR <= -79 { stopTimer() }
     }
 }
