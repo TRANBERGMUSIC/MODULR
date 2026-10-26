@@ -48,6 +48,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var limitingDB: Double?
     var cues: [Double]?           // dine markeringer (sekunder) til at planlægge sættet
     var hotCues: [String: Double]? // hot cues A–H (sekunder), som på en CDJ
+    var eqRegions: [EQRegionData]? // EQ på bestemte stykker af sangen (høres live, kan gemmes i filen)
     var deadSpace: Double?        // sekunders stilhed til sidst
     var trimmed: Bool?            // død luft er fjernet
 

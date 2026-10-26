@@ -100,7 +100,7 @@ final class PlayerModel: ObservableObject {
     @Published var clipped = false
     @Published var peakDB: Double = -80     // højeste top (til tooltip)
 
-    @Published var eq = EQSettings() { didSet { eq.configure(eqUnit) } }
+    @Published var eq = EQSettings() { didSet { appliedEQ = nil; applyActiveEQ() } }
     @Published var volume: Double = 0.85 { didSet { engine.mainMixerNode.outputVolume = Float(volume) } }
 
     private let engine = AVAudioEngine()
@@ -232,6 +232,7 @@ final class PlayerModel: ObservableObject {
         stopTimer()
         playing = false
         track = t
+        NowPlayingKey.shared.key = t.key
         externalArt = art
         externalOverview = nil
         bands = LibraryStore.shared.bands(t)
@@ -269,6 +270,7 @@ final class PlayerModel: ObservableObject {
                 guard let r = result else { return }
                 self.bands = r.bands
                 self.peaks = r.peaks
+                if !self.playing, let t = self.track { self.cuePoint = self.autoCue(for: t) }
                 self.externalOverview = WaveShape.preview(bands: r.bands, peaks: r.peaks, width: 2400, height: 80)
                 if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
                     self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
@@ -365,12 +367,66 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var cuePreviewing = false
     var atCue: Bool { abs(position - cuePoint) < 0.02 }
 
-    /// Første slag efter 0 s – CDJ'ens "auto cue".
+    /// CDJ'ens "auto cue": det første slag hvor musikken faktisk starter (stilhed i starten springes over).
     func autoCue(for t: LibTrack) -> Double {
-        guard let bpm = t.bpm, bpm > 0 else { return 0 }
+        // Hvor starter lyden? (første top over ca. −26 dB i forhold til sangens højeste)
+        var start = 0.0
+        if let i = peaks.firstIndex(where: { $0 > 12 }) { start = Double(i) / MusicAnalyzer.peakRate }
+        guard let bpm = t.bpm, bpm > 0 else { return start }
         let beat = 60 / bpm
         let fb = (t.firstBeatMs ?? 0) / 1000
-        return max(0, fb - floor(fb / beat) * beat)
+        // Nærmeste slag på griddet ved lydens start (højst et halvt slag før)
+        let k = ((start - fb) / beat).rounded()
+        var cue = fb + k * beat
+        if cue < start - beat / 2 { cue += beat }
+        return max(0, cue)
+    }
+
+    // MARK: Sangens opbygning og cue-forslag
+
+    private var sectionCache: (key: String, value: [SongSection])?
+
+    /// Intro/buildup/drop/breakdown/outro for sangen der er indlæst.
+    var sections: [SongSection] {
+        guard let t = liveTrack, let bpm = t.bpm, bpm > 0, !bands.isEmpty else { return [] }
+        let key = "\(t.id)-\(bpm)-\(t.firstBeatMs ?? 0)-\(bands.count)"
+        if let c = sectionCache, c.key == key { return c.value }
+        let v = SongStructure.analyze(bands: bands, bpm: bpm, firstBeat: (t.firstBeatMs ?? 0) / 1000, duration: duration)
+        sectionCache = (key, v)
+        return v
+    }
+
+    /// Forslag til hot cues A–H ud fra dine regler (eller det appen har lært af dig).
+    var cueSuggestions: [String: Double] {
+        guard let t = liveTrack, let bpm = t.bpm, bpm > 0 else { return [:] }
+        return CueRules.suggestions(sections: sections, bpm: bpm, firstBeat: autoCue(for: t), duration: duration)
+    }
+
+    /// Sætter forslagene på de tomme hot cues (dine egne bliver aldrig overskrevet).
+    func applySuggestions() {
+        guard let t = liveTrack else { return }
+        var n = 0
+        for (letter, at) in cueSuggestions where t.hotCues?[letter] == nil {
+            LibraryStore.shared.setHotCue(t.id, letter, at: at)
+            n += 1
+        }
+        LibraryStore.shared.lastMessage = n > 0 ? "\(n) hot cues sat ud fra forslagene" : "Alle forslag er allerede sat"
+    }
+
+    // MARK: EQ-områder (live)
+
+    @Published var editingRegion: UUID?
+    private var appliedEQ: EQSettings?
+
+    /// EQ for det sted der spilles lige nu: et EQ-område hvis vi er i et, ellers EQ for hele sangen.
+    func applyActiveEQ() {
+        let regions = liveTrack?.eqRegions ?? []
+        let active: EQSettings = regions.first(where: { $0.contains(position) })
+            .map { EQSettings(low: $0.low, mid: $0.mid, high: $0.high) } ?? eq
+        if active != appliedEQ {
+            active.configure(eqUnit)
+            appliedEQ = active
+        }
     }
 
     /// Nærmeste slag (quantize, som Q på en CDJ).
@@ -425,7 +481,13 @@ final class PlayerModel: ObservableObject {
             seek(seconds: at)
             if !playing { play() }
         } else {
-            LibraryStore.shared.setHotCue(t.id, letter, at: quantized(position))
+            let at = quantized(position)
+            LibraryStore.shared.setHotCue(t.id, letter, at: at)
+            // Lær hvordan du sætter cues: hvor i opbygningen lagde du den?
+            if let bpm = t.bpm, bpm > 0,
+               let rule = CueRules.describe(at, sections: sections, bpm: bpm, firstBeat: autoCue(for: t)) {
+                CueRules.learn(letter: letter, rule: rule)
+            }
         }
     }
 
@@ -504,9 +566,12 @@ final class PlayerModel: ObservableObject {
 
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+        // .common: timeren kører også mens en museknap holdes nede (CUE, scrub, knapper) – ellers står waveformen stille
+        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             self?.tick()
         }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     private func stopTimer() {
@@ -516,6 +581,7 @@ final class PlayerModel: ObservableObject {
 
     private func tick() {
         if playing { position = currentTime() }
+        applyActiveEQ()
         let m = meter.take()
         func db(_ v: Float) -> Double { v > 0 ? 20 * log10(Double(v)) : -80 }
         // Måleren viser lydniveauet (RMS, som rekordbox' kanal-målere), ikke enkelte toppe
@@ -537,7 +603,8 @@ final class PlayerModel: ObservableObject {
 // MARK: - EQ i filen (offline med samme EQ som afspilleren)
 
 enum EQRender {
-    static func render(url: URL, eq: EQSettings) throws -> ([[Float]], Double) {
+    /// EQ for hele sangen plus EQ-områder: områdernes EQ skiftes præcist ved deres start og slut.
+    static func render(url: URL, eq: EQSettings, regions: [EQRegionData] = []) throws -> ([[Float]], Double) {
         let file = try AVAudioFile(forReading: url)
         let fmt = file.processingFormat
         let engine = AVAudioEngine()
@@ -560,9 +627,23 @@ enum EQRender {
         var out = [[Float]](repeating: [], count: chans)
         for c in 0..<chans { out[c].reserveCapacity(Int(file.length)) }
         var stalls = 0
+        let sr = fmt.sampleRate
+        var bounds = [AVAudioFramePosition]()
+        for r in regions { bounds.append(AVAudioFramePosition(r.start * sr)); bounds.append(AVAudioFramePosition(r.end * sr)) }
+        bounds.sort()
+        var applied: EQSettings? = nil
         while engine.manualRenderingSampleTime < file.length {
-            let left = file.length - engine.manualRenderingSampleTime
-            let frames = AVAudioFrameCount(min(Int64(maxFrames), left))
+            let now = engine.manualRenderingSampleTime
+            // EQ for det sted vi er nået til
+            let t = Double(now) / sr
+            let active: EQSettings = regions.first(where: { $0.contains(t) }).map { EQSettings(low: $0.low, mid: $0.mid, high: $0.high) } ?? eq
+            if active != applied {
+                active.configure(unit)
+                applied = active
+            }
+            var left = file.length - now
+            if let next = bounds.first(where: { $0 > now }) { left = min(left, next - now) }
+            let frames = AVAudioFrameCount(max(1, min(Int64(maxFrames), left)))
             let status = try engine.renderOffline(frames, to: buf)
             switch status {
             case .success:
@@ -583,4 +664,11 @@ enum EQRender {
         engine.stop()
         return (out, fmt.sampleRate)
     }
+}
+
+
+/// Tonearten der spiller lige nu – kun den, så tabellen ikke tegnes om 30 gange i sekundet.
+final class NowPlayingKey: ObservableObject {
+    static let shared = NowPlayingKey()
+    @Published var key: MusicalKey?
 }

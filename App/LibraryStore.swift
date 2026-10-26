@@ -417,7 +417,10 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Lægger EQ'en ind i filen (og retter lydstyrken bagefter, så sangen stadig ligger på målet).
-    func applyEQ(_ id: UUID, eq: EQSettings) {
+    func applyEQ(_ id: UUID, eq: EQSettings, regions: [EQRegionData] = []) {
+        lock.lock()
+        pendingRegions[id] = regions
+        lock.unlock()
         enqueueProcess(id, eq: eq, force: true)
     }
 
@@ -444,6 +447,29 @@ final class LibraryStore: ObservableObject {
         }
     }
     private var pendingFixes = Set<UUID>()
+    private var pendingRegions = [UUID: [EQRegionData]]()
+
+    // MARK: EQ-områder
+
+    func addEQRegion(_ id: UUID, _ r: EQRegionData) {
+        update(id) { $0.eqRegions = ($0.eqRegions ?? []) + [r] }
+    }
+
+    func updateEQRegion(_ id: UUID, _ rid: UUID, _ change: (inout EQRegionData) -> Void) {
+        update(id) {
+            guard var list = $0.eqRegions, let i = list.firstIndex(where: { $0.id == rid }) else { return }
+            change(&list[i])
+            if list[i].end < list[i].start { let s = list[i].start; list[i].start = list[i].end; list[i].end = s }
+            $0.eqRegions = list
+        }
+    }
+
+    func removeEQRegion(_ id: UUID, _ rid: UUID) {
+        update(id) {
+            $0.eqRegions?.removeAll { $0.id == rid }
+            if $0.eqRegions?.isEmpty == true { $0.eqRegions = nil }
+        }
+    }
 
     private func processNow(_ id: UUID, eq: EQSettings?, force: Bool) {
         let target = LoudnessPrefs.target
@@ -528,7 +554,10 @@ final class LibraryStore: ObservableObject {
                 note = String(format: "%+.1f dB uden genkodning", Double(steps) * 1.5)
             } else {
                 // PCM: (EQ) → klippede toppe genskabes → gain → limiter (top −1 dBFS)
-                var input = eq.map { e in (try? EQRender.render(url: source, eq: e).0) ?? srcCh } ?? srcCh
+                lock.lock()
+                let regs = pendingRegions.removeValue(forKey: id) ?? []
+                lock.unlock()
+                var input = eq.map { e in (try? EQRender.render(url: source, eq: e, regions: regs).0) ?? srcCh } ?? srcCh
                 if let cut = trimAt { input = Loudness.trimPCM(input, sr: sr, at: cut) }
                 let (out, res) = Loudness.normalizePCM(input, sr: sr, target: target, maxLimitingDB: Loudness.maxLimitingDB)
                 limiting = res.limitingDB
@@ -589,7 +618,7 @@ final class LibraryStore: ObservableObject {
                 $0.limitingDB = lim
                 $0.clipsRepaired = rep
                 if trimmedNow { $0.trimmed = true; $0.deadSpace = 0 }
-                if let eq { $0.eqApplied = [eq.low, eq.mid, eq.high] } else if source != url { $0.eqApplied = nil }
+                if let eq { $0.eqApplied = [eq.low, eq.mid, eq.high]; $0.eqRegions = nil } else if source != url { $0.eqApplied = nil }
                 if !lossless { $0.bitDepth = 24 }
                 if let size { $0.fileSize = size }
             }

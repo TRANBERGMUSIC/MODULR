@@ -941,13 +941,17 @@ struct TitleCell: View {
 }
 
 struct KeyCell: View {
+    @ObservedObject private var now = NowPlayingKey.shared
     let track: LibTrack
     var body: some View {
         if let k = track.key {
+            let match: Bool = KeyMatch.fits(k, now.key)
             HStack(spacing: 6) {
                 KeyPill(key: k)
-                Text(k.classic).font(.system(size: 12)).foregroundColor(Color.mist.opacity(0.6)).lineLimit(1)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(KeyMatch.green, lineWidth: match ? 2 : 0).padding(-2))
+                Text(k.classic).font(.system(size: 12)).foregroundColor(match ? KeyMatch.green : Color.mist.opacity(0.6)).lineLimit(1)
             }
+            .help(match ? "Passer harmonisk med sangen der spiller" : "")
         } else {
             Text("–").foregroundColor(Color.mist.opacity(0.4))
         }
@@ -1347,11 +1351,22 @@ struct UsbTextCell: View {
     var body: some View { Text(text).monospacedDigit().foregroundColor(Color.mist.opacity(alpha)).lineLimit(1) }
 }
 
+/// Passer to tonearter harmonisk? (samme, ±1 på Camelot-hjulet eller dur/mol-parallel)
+enum KeyMatch {
+    static let green = Color(red: 0.3, green: 0.9, blue: 0.45)
+    static func fits(_ k: MusicalKey, _ playing: MusicalKey?) -> Bool {
+        guard let p = playing else { return false }
+        return k == p || p.compatible.contains(k)
+    }
+}
+
 struct UsbKeyCell: View {
+    @ObservedObject private var now = NowPlayingKey.shared
     let key: String
     var body: some View {
         if let k = MusicalKey.parse(key) {
             KeyPill(key: k)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(KeyMatch.green, lineWidth: KeyMatch.fits(k, now.key) ? 2 : 0).padding(-2))
         } else {
             Text(key).foregroundColor(Color.mist.opacity(0.6))
         }

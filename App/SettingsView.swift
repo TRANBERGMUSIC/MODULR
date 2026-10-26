@@ -60,8 +60,12 @@ struct SettingsView: View {
             LoudnessSettingsView()
                 .padding(20)
                 .tabItem { Label("Lydstyrke", systemImage: "dial.medium") }
+
+            CueRulesSettingsView()
+                .padding(20)
+                .tabItem { Label("Cues", systemImage: "flag") }
         }
-        .frame(width: 620, height: 440)
+        .frame(width: 660, height: 520)
     }
 }
 
@@ -91,5 +95,74 @@ struct LoudnessSettingsView: View {
             .foregroundStyle(.secondary)
             Button("Ret alle sange nu") { LibraryStore.shared.fixAllLoudness() }
         }
+    }
+}
+
+/// Dine regler for hvor hot cues A–H skal foreslås – og hvad appen har lært af dig.
+struct CueRulesSettingsView: View {
+    @State private var rules: [String: CueRule] = CueRules.rules
+    @State private var learnOn: Bool = CueRules.learnEnabled
+    @State private var learned = CueRules.learned
+
+    var body: some View {
+        Form {
+            Section("Hvor skal cues foreslås?") {
+                ForEach(HotCue.letters, id: \.self) { letter in
+                    row(letter)
+                }
+                Button("Gendan standard") {
+                    rules = CueRules.defaults
+                    CueRules.rules = rules
+                }
+            }
+            Section("Lær af mig") {
+                Toggle("Lær hvordan jeg selv sætter cues", isOn: $learnOn)
+                    .onChange(of: learnOn) { _, v in CueRules.learnEnabled = v }
+                Text("Når du sætter en hot cue selv, noterer appen hvor i sangen den ligger (fx \"1. drop\" eller \"16 takter efter første slag\"). Efter 3 sange med samme mønster bruges dit mønster i stedet for reglen ovenfor.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Glem det lærte") {
+                    CueRules.learned = [:]
+                    learned = [:]
+                }
+                .disabled(learned.isEmpty)
+            }
+        }
+    }
+
+    func row(_ letter: String) -> some View {
+        let rule = rules[letter] ?? CueRule(target: .none)
+        let c = HotCue.rgb[letter] ?? (1, 1, 1)
+        return HStack(spacing: 10) {
+            Text(letter)
+                .font(.system(size: 12, weight: .heavy)).foregroundColor(.black)
+                .frame(width: 22, height: 22)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: c.0, green: c.1, blue: c.2)))
+            Picker("", selection: Binding(get: { rule.target }, set: { v in set(letter) { $0.target = v } })) {
+                ForEach(CueRule.Target.allCases) { t in Text(t.title).tag(t) }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+            if rule.target != .none && rule.target != .firstBeat {
+                Stepper("Nr. \(rule.ordinal)", value: Binding(get: { rule.ordinal }, set: { v in set(letter) { $0.ordinal = max(1, v) } }), in: 1...6)
+                    .frame(width: 110)
+            }
+            if rule.target != .none {
+                Stepper(rule.offsetBars == 0 ? "Lige på" : "\(rule.offsetBars > 0 ? "+" : "")\(rule.offsetBars) takter",
+                        value: Binding(get: { rule.offsetBars }, set: { v in set(letter) { $0.offsetBars = v } }), in: -32...64, step: 4)
+                    .frame(width: 150)
+            }
+            Spacer()
+            if learnOn, let l = CueRules.learnedRule(for: letter) {
+                Text("Lært: \(l.rule.summary) (\(l.count)×)")
+                    .font(.caption).foregroundColor(.orange)
+            }
+        }
+    }
+
+    func set(_ letter: String, _ change: (inout CueRule) -> Void) {
+        var r = rules[letter] ?? CueRule(target: .none)
+        change(&r)
+        rules[letter] = r
+        CueRules.rules = rules
     }
 }

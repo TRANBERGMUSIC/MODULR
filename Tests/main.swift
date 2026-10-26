@@ -682,6 +682,51 @@ do {
     check("10 s udløb er ikke død luft", shortTail.dead < Loudness.deadSpaceMinimum)
 }
 
+// MARK: - Opbygning og cue-forslag
+print("\nOpbygning og cue-forslag")
+do {
+    // Syntetiske bånd (150/s) ved 128 BPM: intro 16, buildup 8, drop 16, breakdown 16, buildup 8, drop 16, outro 16 takter
+    let bpm = 128.0
+    let barCols = Int((60 / bpm * 4 * 150).rounded())
+    let plan: [(SectionKind, Int)] = [(.intro, 16), (.buildup, 8), (.drop, 16), (.breakdown, 16), (.buildup, 8), (.drop, 16), (.outro, 16)]
+    var bands = [UInt8]()
+    for (kind, bars) in plan {
+        for b in 0..<bars {
+            let ramp = Double(b) / Double(bars)
+            let v: (Double, Double, Double)
+            switch kind {
+            case .intro, .outro: v = (150, 110, 120)
+            case .buildup: v = (15, 80 + 120 * ramp, 60 + 140 * ramp)
+            case .drop: v = (255, 220, 200)
+            case .breakdown: v = (15, 200, 120)
+            case .main: v = (180, 150, 150)
+            }
+            for _ in 0..<barCols { bands += [UInt8(v.0), UInt8(v.1), UInt8(v.2)] }
+        }
+    }
+    let duration = Double(bands.count / 3) / 150
+    let secs = SongStructure.analyze(bands: bands, bpm: bpm, firstBeat: 0, duration: duration)
+    let kinds = secs.map(\.kind)
+    check("Opbygning findes", kinds == [.intro, .buildup, .drop, .breakdown, .buildup, .drop, .outro], "\(kinds.map(\.rawValue))")
+    check("1. drop starter i takt 25", secs.first { $0.kind == .drop && $0.ordinal == 1 }?.startBar == 24)
+    check("2. drop er nummereret", secs.contains { $0.kind == .drop && $0.ordinal == 2 })
+
+    // Regler
+    let barSec = 60 / bpm * 4
+    let drop1 = CueRule(target: .drop).resolve(sections: secs, bpm: bpm, firstBeat: 0, duration: duration) ?? -1
+    check("Regel: 1. drop", abs(drop1 - 24 * barSec) < 0.01)
+    let b16 = CueRule(target: .firstBeat, offsetBars: 16).resolve(sections: secs, bpm: bpm, firstBeat: 0, duration: duration) ?? -1
+    check("Regel: 16 takter efter første slag", abs(b16 - 16 * barSec) < 0.01)
+    check("Regel-nøgle rundtur", CueRule(key: CueRule(target: .breakdown, ordinal: 2, offsetBars: -4).key) == CueRule(target: .breakdown, ordinal: 2, offsetBars: -4))
+    let described = CueRules.describe(40 * barSec + 0.05, sections: secs, bpm: bpm, firstBeat: 0)
+    check("Din cue genkendes som '1. breakdown'", described == CueRule(target: .breakdown, ordinal: 1, offsetBars: 0), "\(described?.summary ?? "-")")
+    let sug = CueRules.suggestions(sections: secs, bpm: bpm, firstBeat: 0, duration: duration)
+    check("Forslag A–H findes", sug["A"] == 0 && sug["E"] != nil && sug["H"] != nil, "\(sug.keys.sorted())")
+    // EQ-område
+    let r = EQRegionData(start: 10, end: 20, low: 4)
+    check("EQ-område dækker sit stykke", r.contains(10) && r.contains(19.9) && !r.contains(20))
+}
+
 try? FileManager.default.removeItem(at: tmp)
 print("\n\(passed) bestået, \(failed) fejlet")
 exit(failed == 0 ? 0 : 1)

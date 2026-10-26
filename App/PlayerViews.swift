@@ -28,11 +28,18 @@ struct PlayerPanel: View {
                     if compact {
                         OverviewWaveform(track: t, zoom: nil).frame(height: 26)
                     } else {
-                        DetailWaveform(track: t, zoom: $zoom, gridMode: mode == .grid)
-                            .frame(height: 104)
-                        VStack(spacing: 2) {
-                            OverviewWaveform(track: t, zoom: zoom).frame(height: 30)
-                            BarRuler(track: t).frame(height: 14)
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(spacing: 8) {
+                                DetailWaveform(track: t, zoom: $zoom, gridMode: mode == .grid, showSuggestions: mode == .cues)
+                                    .frame(height: 104)
+                                VStack(spacing: 2) {
+                                    OverviewWaveform(track: t, zoom: zoom).frame(height: 30)
+                                    BarRuler(track: t).frame(height: 14)
+                                    SectionStrip().frame(height: 14)
+                                }
+                            }
+                            DJMMeter()
+                                .frame(width: 52, height: 174)
                         }
                         switch mode {
                         case .grid: GridEditBar(track: t)
@@ -62,8 +69,6 @@ struct PlayerPanel: View {
                 if let k = t.key { KeyPill(key: k) }
                 Text(t.bpmText).font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundColor(.mist)
                     .fixedSize()
-                LevelMeter()
-                    .frame(width: 96, height: 14)
                 if !compact {
                     ModSegmented(selection: $mode, options: [(PlayerMode.play, "Afspil"), (PlayerMode.grid, "Grid"),
                                                              (PlayerMode.cues, "Cues"), (PlayerMode.eq, "EQ")])
@@ -151,6 +156,7 @@ struct DetailWaveform: View {
     let track: LibTrack
     @Binding var zoom: Double
     let gridMode: Bool
+    var showSuggestions: Bool = false
     @State private var dragStart: Double?
     @State private var wasPlaying = false
     @State private var gridShift: Double = 0
@@ -402,6 +408,32 @@ struct DetailWaveform: View {
                      at: CGPoint(x: x, y: 7.5), anchor: .center)
         }
 
+        // EQ-områder: let tonet felt med "EQ"
+        for r in (track.eqRegions ?? []) where r.end >= t0 && r.start <= t0 + zoom {
+            let x0 = max(0, (r.start - t0) / secsPerPx), x1 = min(w, (r.end - t0) / secsPerPx)
+            let editing: Bool = player.editingRegion == r.id
+            ctx.fill(Path(CGRect(x: x0, y: 0, width: x1 - x0, height: h)), with: .color(Color.ember.opacity(editing ? 0.16 : 0.08)))
+            ctx.fill(Path(CGRect(x: x0, y: h - 3, width: x1 - x0, height: 3)), with: .color(Color.ember.opacity(editing ? 0.9 : 0.5)))
+            ctx.draw(Text("EQ").font(.system(size: 9, weight: .bold)).foregroundColor(Color.ember), at: CGPoint(x: x0 + 4, y: h - 12), anchor: .leading)
+        }
+
+        // Forslag til hot cues (stiplede, kun i Cues-fanen og kun for tomme bogstaver)
+        if showSuggestions {
+            for (letter, at) in player.cueSuggestions where track.hotCues?[letter] == nil && at >= t0 && at <= t0 + zoom {
+                let x = (at - t0) / secsPerPx
+                let c = HotCue.rgb[letter] ?? (1, 1, 1)
+                let color = Color(red: c.0, green: c.1, blue: c.2)
+                var dash = Path()
+                dash.move(to: CGPoint(x: x, y: 16))
+                dash.addLine(to: CGPoint(x: x, y: h))
+                ctx.stroke(dash, with: .color(color.opacity(0.8)), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                ctx.stroke(Path(roundedRect: CGRect(x: x - 7.5, y: 0.75, width: 15, height: 14), cornerRadius: 3),
+                           with: .color(color), lineWidth: 1.5)
+                ctx.draw(Text(letter).font(.system(size: 11, weight: .heavy)).foregroundColor(color),
+                         at: CGPoint(x: x, y: 7.5), anchor: .center)
+            }
+        }
+
         // Cue-punktet (CUE-knappen): orange trekant nederst
         if player.cuePoint >= t0 && player.cuePoint <= t0 + zoom {
             let x = (player.cuePoint - t0) / secsPerPx
@@ -528,6 +560,108 @@ struct BarRuler: View {
             ctx.fill(Path(CGRect(x: px - 0.5, y: 0, width: 1, height: h)), with: .color(Color.white.opacity(0.8)))
         }
         .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Sangens opbygning (intro, buildup, drop, breakdown, outro)
+
+struct SectionStrip: View {
+    @ObservedObject private var player = PlayerModel.shared
+
+    var body: some View {
+        let secs = player.sections
+        let dur: Double = max(0.001, player.duration)
+        GeometryReader { g in
+            let w = g.size.width
+            ZStack(alignment: .leading) {
+                ForEach(Array(secs.enumerated()), id: \.offset) { item in
+                    let s = item.element
+                    let x0: CGFloat = w * CGFloat(max(0, s.start) / dur)
+                    let x1: CGFloat = w * CGFloat(min(dur, s.end) / dur)
+                    let c = s.kind.rgb
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3).fill(Color(red: c.0, green: c.1, blue: c.2).opacity(0.35))
+                        if x1 - x0 > 44 {
+                            Text(s.ordinal > 1 && (s.kind == .drop || s.kind == .breakdown || s.kind == .buildup)
+                                 ? "\(s.kind.title) \(s.ordinal)" : s.kind.title)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(Color(red: c.0, green: c.1, blue: c.2))
+                                .lineLimit(1)
+                                .padding(.leading, 4)
+                        }
+                    }
+                    .frame(width: max(1, x1 - x0 - 1))
+                    .offset(x: x0)
+                    .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar)")
+                }
+            }
+        }
+        .opacity(secs.isEmpty ? 0 : 1)
+    }
+}
+
+// MARK: - Niveaumåler som på en DJM-mixer
+
+/// To lodrette LED-søjler (L/R) med dB-skala +9 … −33, grøn/orange/rød og CLIP-lampe øverst.
+/// 0 dB på måleren svarer til et normalt klubniveau (RMS ca. −9 dBFS), som på en mixer.
+struct DJMMeter: View {
+    @ObservedObject private var player = PlayerModel.shared
+    static let steps: [Double] = [9, 6, 3, 0, -3, -6, -9, -12, -15, -18, -21, -24, -27, -30, -33]
+    static let offset = 9.0            // dBFS (RMS) + 9 = mixerens dB
+
+    static func color(_ db: Double) -> Color {
+        if db >= 6 { return Color(red: 0.95, green: 0.2, blue: 0.16) }
+        if db >= -3 { return Color(red: 0.98, green: 0.62, blue: 0.12) }
+        return Color(red: 0.25, green: 0.85, blue: 0.3)
+    }
+
+    var body: some View {
+        let l: Double = player.levelL + DJMMeter.offset
+        let r: Double = player.levelR + DJMMeter.offset
+        let hold: Double = player.holdDB + DJMMeter.offset
+        VStack(spacing: 4) {
+            Text("CLIP")
+                .font(.system(size: 8, weight: .heavy))
+                .foregroundColor(player.clipped ? .white : Color(red: 0.6, green: 0.15, blue: 0.12))
+                .frame(width: 30, height: 12)
+                .background(RoundedRectangle(cornerRadius: 2).fill(player.clipped ? Color(red: 0.95, green: 0.15, blue: 0.12) : Color(red: 0.25, green: 0.05, blue: 0.05)))
+                .onTapGesture { player.resetClip() }
+                .help("Lyser kun hvis sangen klipper (0 dBFS). Klik for at nulstille.")
+            HStack(alignment: .top, spacing: 3) {
+                column(level: l, hold: hold)
+                VStack(spacing: 0) {
+                    ForEach(DJMMeter.steps, id: \.self) { db in
+                        Text(db > 0 ? "\(Int(db))" : "\(Int(db))")
+                            .font(.system(size: 7, weight: .medium)).monospacedDigit()
+                            .foregroundColor(.mist.opacity(0.55))
+                            .frame(height: 9)
+                    }
+                }
+                .frame(width: 16)
+                column(level: r, hold: hold)
+            }
+            HStack(spacing: 14) {
+                Text("L").font(.system(size: 8, weight: .bold)).foregroundColor(.mist.opacity(0.5))
+                Text("R").font(.system(size: 8, weight: .bold)).foregroundColor(.mist.opacity(0.5))
+            }
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.45)))
+        .help(String(format: "Niveau %.1f dB (mixer-skala) · top %.1f dBFS", max(l, r), player.peakDB))
+    }
+
+    func column(level: Double, hold: Double) -> some View {
+        VStack(spacing: 0) {
+            ForEach(DJMMeter.steps, id: \.self) { db in
+                let lit: Bool = level >= db
+                let held: Bool = !lit && abs(hold - db) < 1.5 && hold > -40
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(DJMMeter.color(db).opacity(lit ? 1 : (held ? 0.6 : 0.12)))
+                    .frame(width: 9, height: 7)
+                    .frame(height: 9)
+            }
+        }
     }
 }
 
@@ -739,6 +873,15 @@ struct CueTools: View {
             .disabled(memory.isEmpty)
             .help("Slet nærmeste memory cue")
             Spacer(minLength: 0)
+            let open: Int = player.cueSuggestions.keys.filter { track.hotCues?[$0] == nil }.count
+            Button {
+                player.applySuggestions()
+            } label: {
+                Label(open > 0 ? "Sæt forslag (\(open))" : "Forslag sat", systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.ember)
+            .disabled(open == 0)
+            .help("Sætter de stiplede forslag på de tomme hot cues – ud fra dine regler i Indstillinger → Cues, eller det appen har lært af dig")
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
@@ -851,38 +994,143 @@ struct EQPanel: View {
     @ObservedObject private var player = PlayerModel.shared
     let track: LibTrack
 
-    var body: some View {
-        HStack(spacing: 18) {
-            Knob(title: "Bas", value: $player.eq.low)
-            Knob(title: "Mellem", value: $player.eq.mid)
-            Knob(title: "Diskant", value: $player.eq.high)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("EQ'en høres med det samme. Gem lægger den ind i filen og retter lydstyrken bagefter.")
-                    .font(.system(size: 11)).foregroundColor(.mist.opacity(0.6))
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button("Nulstil") { player.eq = EQSettings() }
-                        .buttonStyle(.ghost)
-                        .disabled(player.eq.isFlat)
-                    Button("Gem i filen…") { save() }
-                        .buttonStyle(.ember)
-                        .disabled(player.eq.isFlat)
+    var regions: [EQRegionData] { track.eqRegions ?? [] }
+    var editing: EQRegionData? { regions.first { $0.id == player.editingRegion } }
+
+    /// Knapperne styrer enten EQ for hele sangen eller det valgte område.
+    func binding(_ band: WritableKeyPath<EQRegionData, Double>, base: WritableKeyPath<EQSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { editing.map { $0[keyPath: band] } ?? player.eq[keyPath: base] },
+            set: { v in
+                if let r = editing {
+                    LibraryStore.shared.updateEQRegion(track.id, r.id) { $0[keyPath: band] = v }
+                } else {
+                    player.eq[keyPath: base] = v
                 }
+            })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            regionBar
+            HStack(spacing: 18) {
+                Knob(title: "Bas", value: binding(\.low, base: \.low))
+                Knob(title: "Mellem", value: binding(\.mid, base: \.mid))
+                Knob(title: "Diskant", value: binding(\.high, base: \.high))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(editing == nil ? "EQ for hele sangen – høres med det samme." :
+                            "EQ kun i det valgte område (\(barText(editing!))) – høres når afspilningen er der.")
+                        .font(.system(size: 11)).foregroundColor(.mist.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button("Nulstil") {
+                            if let r = editing {
+                                LibraryStore.shared.updateEQRegion(track.id, r.id) { $0.low = 0; $0.mid = 0; $0.high = 0 }
+                            } else {
+                                player.eq = EQSettings()
+                            }
+                        }
+                        .buttonStyle(.ghost)
+                        Button("Gem i filen…") { save() }
+                            .buttonStyle(.ember)
+                            .disabled(player.eq.isFlat && regions.isEmpty)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    var regionBar: some View {
+        HStack(spacing: 6) {
+            Button { player.editingRegion = nil } label: { Text("Hele sangen") }
+                .buttonStyle(RegionChipStyle(active: editing == nil))
+            ForEach(regions) { r in
+                Button { player.editingRegion = r.id; player.seek(seconds: r.start) } label: { Text(barText(r)) }
+                    .buttonStyle(RegionChipStyle(active: player.editingRegion == r.id))
+                    .modMenu(title: "EQ-område \(barText(r))") {
+                        [MMItem.action("Slet område", icon: "trash", destructive: true) {
+                            if PlayerModel.shared.editingRegion == r.id { PlayerModel.shared.editingRegion = nil }
+                            LibraryStore.shared.removeEQRegion(track.id, r.id)
+                        }]
+                    }
+            }
+            ModMenuButton(items: {
+                var items = [MMItem]()
+                if let s = player.sections.first(where: { $0.start <= player.position && player.position < $0.end }) {
+                    items.append(.action("Denne sektion (\(s.kind.title))", icon: "rectangle.split.3x1") { addRegion(s.start, s.end) })
+                }
+                items.append(.action("Denne frase (8 takter)", icon: "music.note") { addPhrase() })
+                items.append(.action("Fra her og 16 takter frem", icon: "arrow.right.to.line") { addBars(16) })
+                return items
+            }) {
+                Label("Nyt område", systemImage: "plus").font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.mist).padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.08)))
+            }
+            if let r = editing {
+                Button("Start her") { LibraryStore.shared.updateEQRegion(track.id, r.id) { $0.start = player.quantized(player.position) } }
+                    .buttonStyle(RegionChipStyle(active: false))
+                Button("Slut her") { LibraryStore.shared.updateEQRegion(track.id, r.id) { $0.end = player.quantized(player.position) } }
+                    .buttonStyle(RegionChipStyle(active: false))
             }
             Spacer(minLength: 0)
         }
     }
 
+    func barText(_ r: EQRegionData) -> String {
+        guard let bpm = track.bpm, bpm > 0 else { return String(format: "%d:%02d", Int(r.start) / 60, Int(r.start) % 60) }
+        let fb = (track.firstBeatMs ?? 0) / 1000
+        let a = BeatGrid.position(at: r.start + 0.01, bpm: bpm, firstBeat: fb).bar
+        let b = BeatGrid.position(at: r.end - 0.01, bpm: bpm, firstBeat: fb).bar
+        return "Takt \(a)–\(b)"
+    }
+
+    func addRegion(_ start: Double, _ end: Double) {
+        let r = EQRegionData(start: start, end: end)
+        LibraryStore.shared.addEQRegion(track.id, r)
+        player.editingRegion = r.id
+    }
+
+    func addPhrase() {
+        guard let bpm = track.bpm, bpm > 0 else { return addBars(8) }
+        let phrase = 60 / bpm * 4 * Double(BeatGrid.barsPerPhrase)
+        let fb = (track.firstBeatMs ?? 0) / 1000
+        let start = fb + floor((player.position - fb) / phrase) * phrase
+        addRegion(max(0, start), min(player.duration, start + phrase))
+    }
+
+    func addBars(_ n: Int) {
+        let bar = 60 / max(1, track.bpm ?? 120) * 4
+        let start = player.quantized(player.position)
+        addRegion(start, min(player.duration, start + Double(n) * bar))
+    }
+
     func save() {
         let eq = player.eq
+        let regs = regions
         let wav: Bool = !["wav", "aif", "aiff"].contains(track.ext)
-        let msg = "\(eq.summary). Filen rettes bagefter til \(Int(LoudnessPrefs.target)) LUFS med limiter, så den ikke klipper."
+        var msg = eq.isFlat ? "" : "Hele sangen: \(eq.summary). "
+        if !regs.isEmpty { msg += "\(regs.count) EQ-område\(regs.count == 1 ? "" : "r") lægges ind præcis på deres takter. " }
+        msg += "Filen rettes bagefter til \(Int(LoudnessPrefs.target)) LUFS, så den ikke klipper."
             + (wav ? " \(track.codec) kan ikke skrives uden tab, så den gemmes som 24-bit WAV." : "")
             + " Originalen ligger i Musik/MODULR/Originaler."
         Dialogs.shared.confirm("Læg EQ'en ind i filen?", message: msg, icon: "slider.vertical.3", button: "Gem i filen") {
-            LibraryStore.shared.applyEQ(track.id, eq: eq)
+            LibraryStore.shared.applyEQ(track.id, eq: eq, regions: regs)
             player.eq = EQSettings()
+            player.editingRegion = nil
         }
+    }
+}
+
+struct RegionChipStyle: ButtonStyle {
+    let active: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(active ? .void : .mist.opacity(0.85))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 5).fill(active ? Color.ember : Color.white.opacity(configuration.isPressed ? 0.14 : 0.08)))
     }
 }
 
