@@ -42,7 +42,9 @@ struct LibTrack: Codable, Identifiable, Equatable {
     /// "128 kbps", "320 kbps", "Lossless", "Fake 320 → 128"
     var qualityText: String {
         guard let tier = tierKbps else { return analyzed ? "–" : "…" }
-        let real = tier >= 9999 ? (["WAV", "AIFF", "FLAC", "ALAC", "PCM"].contains(codec) ? "Lossless" : "320 kbps") : "\(tier) kbps"
+        let lossless: Bool = ["WAV", "AIFF", "FLAC", "ALAC", "PCM"].contains(codec)
+        var real = "\(tier) kbps"
+        if tier >= 9999 { real = lossless ? "Lossless" : "320 kbps" }
         if let s = statedKbps, s < 600, tier < 9999, s >= tier + 40 { return "Fake \(s) → \(tier)" }
         if ["WAV", "AIFF", "FLAC", "ALAC", "PCM"].contains(codec), tier < 9999 { return "Fake \(codec) → \(tier)" }
         return real
@@ -130,7 +132,14 @@ struct LibraryIndex: Codable, Equatable {
     var nodes: [LibNode] = []
 
     func children(of parent: UUID?) -> [LibNode] {
-        nodes.filter { $0.parent == parent }.sorted { ($0.isFolder ? 0 : 1, $0.sort, $0.name) < ($1.isFolder ? 0 : 1, $1.sort, $1.name) }
+        nodes.filter { $0.parent == parent }.sorted(by: LibraryIndex.nodeOrder)
+    }
+
+    /// Mapper først, derefter sorteringsnummer, derefter navn.
+    static func nodeOrder(_ a: LibNode, _ b: LibNode) -> Bool {
+        if a.isFolder != b.isFolder { return a.isFolder }
+        if a.sort != b.sort { return a.sort < b.sort }
+        return a.name < b.name
     }
 
     func track(_ id: UUID) -> LibTrack? { tracks.first { $0.id == id } }

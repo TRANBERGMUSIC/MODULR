@@ -411,23 +411,35 @@ final class LibraryStore: ObservableObject {
 
     /// Bygger en sang til USB-skriveren: lydfil, data, covers (80 og 240 px) og waveform-bånd.
     func usbTrack(_ t: LibTrack, tempDir: URL) -> [String: Any] {
-        var d: [String: Any] = [
-            "source": t.path, "title": t.title, "artist": t.artist, "album": t.album, "genre": t.genre,
-            "key": t.key?.classic ?? "", "bpm": t.bpm ?? 0, "duration": t.duration ?? 0,
-            "year": t.year ?? 0, "sample_rate": Int(t.sampleRate ?? 44100), "bitrate": t.statedKbps ?? 0,
-            "depth": t.bitDepth ?? 16,
-            "comment": [t.key?.camelot, t.energy.map { "Energy \($0)" }].compactMap { $0 }.joined(separator: " - "),
-        ]
+        var d = [String: Any]()
+        d["source"] = t.path
+        d["title"] = t.title
+        d["artist"] = t.artist
+        d["album"] = t.album
+        d["genre"] = t.genre
+        d["key"] = t.key?.classic ?? ""
+        d["bpm"] = t.bpm ?? 0
+        d["duration"] = t.duration ?? 0
+        d["year"] = t.year ?? 0
+        d["sample_rate"] = Int(t.sampleRate ?? 44100)
+        d["bitrate"] = t.statedKbps ?? 0
+        d["depth"] = t.bitDepth ?? 16
+        var commentParts = [String]()
+        if let k = t.key { commentParts.append(k.camelot) }
+        if let e = t.energy { commentParts.append("Energy \(e)") }
+        d["comment"] = commentParts.joined(separator: " - ")
         if let a = artURL(t), let raw = try? Data(contentsOf: a) {
             let small = tempDir.appendingPathComponent("\(t.id.uuidString)-s.jpg")
             let big = tempDir.appendingPathComponent("\(t.id.uuidString)-m.jpg")
             if let s = ArtworkImage.squareJPEG(data: raw, side: 80) { try? s.write(to: small); d["artwork"] = small.path }
             if let b = ArtworkImage.squareJPEG(data: raw, side: 240) { try? b.write(to: big); d["artwork_m"] = big.path }
         }
-        d["analysis"] = [
-            "bpm": t.bpm ?? 0, "duration": t.duration ?? 0, "first_beat_ms": t.firstBeatMs ?? 0,
-            "bands": Data(bands(t)).base64EncodedString(),
-        ] as [String: Any]
+        var analysis = [String: Any]()
+        analysis["bpm"] = t.bpm ?? 0
+        analysis["duration"] = t.duration ?? 0
+        analysis["first_beat_ms"] = t.firstBeatMs ?? 0
+        analysis["bands"] = Data(bands(t)).base64EncodedString()
+        d["analysis"] = analysis
         return d
     }
 }
@@ -466,9 +478,13 @@ final class WaveformCache {
             let h = Double(top) / 255 * mid
             // farve: normaliseret blanding, lysere jo mere diskant
             let s = 255.0 / Double(top)
-            let r = UInt8(min(255, Double(lo) * s * 0.95 + Double(hi) * 0.25))
-            let g = UInt8(min(255, Double(mi) * s * 0.75 + Double(hi) * 0.25))
-            let bl = UInt8(min(255, Double(hi) * s * 0.95))
+            let loD: Double = Double(lo), miD: Double = Double(mi), hiD: Double = Double(hi)
+            let rV: Double = loD * s * 0.95 + hiD * 0.25
+            let gV: Double = miD * s * 0.75 + hiD * 0.25
+            let bV: Double = hiD * s * 0.95
+            let r = UInt8(min(255.0, rV))
+            let g = UInt8(min(255.0, gV))
+            let bl = UInt8(min(255.0, bV))
             for y in 0..<height {
                 let dy = abs(Double(y) + 0.5 - mid)
                 guard dy <= h else { continue }

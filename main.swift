@@ -725,6 +725,13 @@ final class Updater: ObservableObject {
         p.waitUntilExit()
         let output = String(data: data, encoding: .utf8) ?? ""
         guard p.terminationStatus == 0 else {
+            let errors = output.split(separator: "\n").filter { $0.contains("error:") }
+            if let first = errors.first {
+                // fx ".../App/LibraryView.swift:412:17: error: ..." → "LibraryView.swift:412: ..."
+                let line = String(first)
+                let short = line.components(separatedBy: "/").last ?? line
+                throw UpdateError.message(short + (errors.count > 1 ? " (+\(errors.count - 1) flere)" : ""))
+            }
             throw UpdateError.message(String(output.suffix(400)))
         }
         return output

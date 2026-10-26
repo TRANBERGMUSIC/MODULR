@@ -203,7 +203,8 @@ enum MusicAnalyzer {
             for (m, w) in [(1.0, 1.0), (2.0, 0.5), (4.0, 0.25)] where lag * m + 1 < Double(ac.count) {
                 sc += w * Double(acAt(lag * m))
             }
-            let prior = exp(-0.5 * pow(log2(b / 125) / 0.6, 2))
+            let octaves: Double = log2(b / 125) / 0.6
+            let prior: Double = exp(-0.5 * octaves * octaves)
             if sc * prior > bestScore {
                 bestScore = sc * prior
                 bpm = b
@@ -257,7 +258,9 @@ enum MusicAnalyzer {
             ph += 0.25
         }
         let beatMs = 60000 / bpm
-        var first = (((bestPh + 1) * Double(hop) + Double(n) / 2) / sr * 1000 + 10).truncatingRemainder(dividingBy: beatMs)
+        let centerSamples: Double = (bestPh + 1) * Double(hop) + Double(n) / 2
+        let rawMs: Double = centerSamples / sr * 1000 + 10
+        var first: Double = rawMs.truncatingRemainder(dividingBy: beatMs)
         if first > beatMs - 25 { first -= beatMs }
 
         // Tæthed: andel af rammer med tydelige anslag (til energi)
@@ -367,7 +370,10 @@ enum MusicAnalyzer {
     /// 1–10 som i Mixed In Key: lydstyrke, diskant og tæthed af anslag.
     static func energyRating(loudnessDB: Double, brightness: Double, density: Double) -> Int {
         func norm(_ v: Double, _ a: Double, _ b: Double) -> Double { min(1, max(0, (v - a) / (b - a))) }
-        let score = 0.55 * norm(loudnessDB, -24, -8) + 0.25 * norm(brightness, 0.002, 0.06) + 0.20 * norm(density, 0.05, 0.3)
+        let a: Double = 0.55 * norm(loudnessDB, -24, -8)
+        let b: Double = 0.25 * norm(brightness, 0.002, 0.06)
+        let c: Double = 0.20 * norm(density, 0.05, 0.3)
+        let score: Double = a + b + c
         return Int(min(10, max(1, (1 + 9 * score).rounded())))
     }
 }

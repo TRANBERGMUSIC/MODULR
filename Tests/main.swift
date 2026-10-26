@@ -100,11 +100,16 @@ func song(seed: UInt64, bars: Int, bpm: Double = 124) -> [Float] {
             let t = Double(i) / sr
             var s = 0.0
             for k in [0, 4, 7, 12] {
-                s += 0.12 * sin(2 * .pi * 220 * pow(2, Double(r + k) / 12) * t) * exp(-0.3 * t)
+                let fk: Double = 220 * pow(2, Double(r + k) / 12)
+                s += 0.12 * sin(2 * Double.pi * fk * t) * exp(-0.3 * t)
             }
-            s += 0.1 * sin(2 * .pi * 220 * pow(2, Double(r + mel + 12) / 12) * t)
+            let fm: Double = 220 * pow(2, Double(r + mel + 12) / 12)
+            s += 0.1 * sin(2 * Double.pi * fm * t)
             let inBeat = t.truncatingRemainder(dividingBy: beat)
-            if inBeat < 0.05 { s += 0.4 * sin(2 * .pi * 55 * inBeat) * exp(-inBeat * 44100 / 800) }
+            if inBeat < 0.05 {
+                let kick: Double = 0.4 * sin(2 * Double.pi * 55 * inBeat)
+                s += kick * exp(-inBeat * 44100 / 800)
+            }
             s += (rng.next() - 0.5) * 0.06
             out.append(Float(s))
         }
@@ -404,8 +409,11 @@ do {
         while Double(i) * beat < seconds {
             let s = Int((Double(i) * beat + offsetMs / 1000) * sr)
             for k in 0..<Int(0.18 * sr) where s + k < n {
-                let tt = Double(k) / sr
-                x[s + k] += Float(0.9 * sin(2 * .pi * (50 + 80 * exp(-tt * 30)) * tt) * exp(-tt * 12))
+                let tt: Double = Double(k) / sr
+                let freq: Double = 50 + 80 * exp(-tt * 30)
+                let phase: Double = 2 * Double.pi * freq * tt
+                let v: Double = 0.9 * sin(phase) * exp(-tt * 12)
+                x[s + k] += Float(v)
             }
             i += 1
         }
@@ -417,11 +425,13 @@ do {
             let third = (minor && degs[b % 4] != 7) ? 3 : 4
             let s = Int(Double(b) * bar * sr), e = min(n, Int(Double(b + 1) * bar * sr))
             for iv in [0, third, 7, 12] {
-                let f = 130.81 * pow(2, Double(r + iv) / 12)
-                for k in s..<e { x[k] += Float(0.08 * sin(2 * .pi * f * Double(k) / sr)) }
+                let f: Double = 130.81 * pow(2, Double(r + iv) / 12)
+                let w: Double = 2 * Double.pi * f / sr
+                for k in s..<e { x[k] += Float(0.08 * sin(w * Double(k))) }
             }
-            let fb = 65.41 * pow(2, Double(r) / 12)
-            for k in s..<e { x[k] += Float(0.15 * sin(2 * .pi * fb * Double(k) / sr)) }
+            let fb: Double = 65.41 * pow(2, Double(r) / 12)
+            let wb: Double = 2 * Double.pi * fb / sr
+            for k in s..<e { x[k] += Float(0.15 * sin(wb * Double(k))) }
             b += 1
         }
         return x

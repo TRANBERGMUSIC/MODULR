@@ -87,7 +87,11 @@ final class PlayerModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
 extension LibTrack {
     var sortBPM: Double { bpm ?? 0 }
-    var sortKey: Int { key.map { $0.camelotNumber * 2 + ($0.minor ? 0 : 1) } ?? 99 }
+    var sortKey: Int {
+        guard let k = key else { return 99 }
+        let ab: Int = k.minor ? 0 : 1
+        return k.camelotNumber * 2 + ab
+    }
     var sortEnergy: Int { energy ?? 0 }
     var sortDuration: Double { duration ?? 0 }
     var sortQuality: Int { tierKbps ?? 0 }
@@ -343,7 +347,7 @@ struct NodeRow: View {
                 }
             }
             .padding(.leading, CGFloat(depth) * 14)
-            .background(RoundedRectangle(cornerRadius: 8).stroke(targeted ? Color.ember : .clear, lineWidth: 1.5))
+            .background(RoundedRectangle(cornerRadius: 8).stroke(targeted ? Color.ember : Color.clear, lineWidth: 1.5))
             .draggable("node:\(node.id.uuidString)")
             .dropDestination(for: String.self) { items, _ in
                 for s in items {
@@ -384,53 +388,95 @@ struct CamelotWheel: View {
     @EnvironmentObject var player: PlayerModel
 
     static func color(_ k: MusicalKey, alpha: Double = 1) -> Color {
-        Color(hue: k.hue / 360, saturation: k.minor ? 0.42 : 0.55, brightness: k.minor ? 0.98 : 0.92, opacity: alpha)
+        let hue: Double = k.hue / 360
+        let sat: Double = k.minor ? 0.42 : 0.55
+        let bri: Double = k.minor ? 0.98 : 0.92
+        return Color(hue: hue, saturation: sat, brightness: bri, opacity: alpha)
+    }
+
+    static let allKeys: [MusicalKey] = (1...12).flatMap { n in
+        [MusicalKey(camelotNumber: n, minor: false)!, MusicalKey(camelotNumber: n, minor: true)!]
     }
 
     var body: some View {
         GeometryReader { geo in
-            let size = min(geo.size.width, geo.size.height)
-            let c = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
-            let rOuter = size / 2, rMid = size * 0.34, rInner = size * 0.19
-            let compatible = Set(player.track?.key?.compatible ?? [])
+            let size: CGFloat = min(geo.size.width, geo.size.height)
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
             ZStack {
-                ForEach(1...12, id: \.self) { n in
-                    ForEach([false, true], id: \.self) { minor in
-                        let k = MusicalKey(camelotNumber: n, minor: minor)!
-                        let start = Angle(degrees: Double(n - 1) * 30 - 105)
-                        let end = Angle(degrees: Double(n) * 30 - 105)
-                        let (r0, r1) = minor ? (rInner, rMid) : (rMid, rOuter)
-                        let isSel = selected.contains(k)
-                        let isCur = player.track?.key == k
-                        let fade = !selected.isEmpty && !isSel
-                        RingSegment(center: c, r0: r0, r1: r1 - 1.5, start: start, end: end)
-                            .fill(Self.color(k, alpha: fade ? 0.28 : (compatible.contains(k) ? 1 : 0.85)))
-                            .overlay(RingSegment(center: c, r0: r0, r1: r1 - 1.5, start: start, end: end)
-                                .stroke(isCur ? Color.white : (isSel ? Color.void : .clear), lineWidth: isCur ? 2.5 : 1.5))
-                            .onTapGesture {
-                                if isSel { selected.remove(k) } else { selected.insert(k) }
-                            }
-                        let mid: Double = (start.radians + end.radians) / 2
-                        let rl: CGFloat = (r0 + r1) / 2
-                        let px: CGFloat = c.x + CGFloat(cos(mid)) * rl
-                        let py: CGFloat = c.y + CGFloat(sin(mid)) * rl
-                        Text(k.camelot)
-                            .font(.system(size: minor ? 9 : 10, weight: .bold))
-                            .foregroundColor(.void.opacity(fade ? 0.4 : 0.85))
-                            .position(x: px, y: py)
-                            .allowsHitTesting(false)
-                    }
+                ForEach(Self.allKeys, id: \.self) { k in
+                    WheelSegment(key: k, center: center, size: size, selected: $selected,
+                                 current: player.track?.key,
+                                 compatible: player.track?.key?.compatible ?? [])
                 }
-                Circle().fill(Color.void).frame(width: rInner * 2 - 4, height: rInner * 2 - 4).position(c)
-                if let k = player.track?.key {
-                    VStack(spacing: 0) {
-                        Text(k.camelot).font(.system(size: 18, weight: .bold)).foregroundColor(Self.color(k))
-                        Text(k.classic).font(.system(size: 10)).foregroundColor(.mist.opacity(0.6))
-                    }
-                    .position(c)
-                } else {
-                    Image(systemName: "dial.medium").foregroundColor(.mist.opacity(0.3)).position(c)
+                WheelCenter(key: player.track?.key, center: center, size: size)
+            }
+        }
+    }
+}
+
+struct WheelSegment: View {
+    let key: MusicalKey
+    let center: CGPoint
+    let size: CGFloat
+    @Binding var selected: Set<MusicalKey>
+    let current: MusicalKey?
+    let compatible: [MusicalKey]
+
+    var body: some View {
+        let n: Int = key.camelotNumber
+        let start = Angle(degrees: Double(n - 1) * 30 - 105)
+        let end = Angle(degrees: Double(n) * 30 - 105)
+        let rInner: CGFloat = size * 0.19
+        let rMid: CGFloat = size * 0.34
+        let rOuter: CGFloat = size / 2
+        let r0: CGFloat = key.minor ? rInner : rMid
+        let r1: CGFloat = (key.minor ? rMid : rOuter) - 1.5
+        let isSel: Bool = selected.contains(key)
+        let isCur: Bool = current == key
+        let fade: Bool = !selected.isEmpty && !isSel
+        let alpha: Double = fade ? 0.28 : (compatible.contains(key) ? 1.0 : 0.85)
+        let strokeColor: Color = isCur ? Color.white : (isSel ? Color.void : Color.clear)
+        let lineWidth: CGFloat = isCur ? 2.5 : 1.5
+        let mid: Double = (start.radians + end.radians) / 2
+        let rl: CGFloat = (r0 + r1) / 2
+        let px: CGFloat = center.x + CGFloat(cos(mid)) * rl
+        let py: CGFloat = center.y + CGFloat(sin(mid)) * rl
+        let shape = RingSegment(center: center, r0: r0, r1: r1, start: start, end: end)
+        let fontSize: CGFloat = key.minor ? 9 : 10
+        let textAlpha: Double = fade ? 0.4 : 0.85
+        return ZStack {
+            shape.fill(CamelotWheel.color(key, alpha: alpha))
+            shape.stroke(strokeColor, lineWidth: lineWidth)
+            Text(key.camelot)
+                .font(.system(size: fontSize, weight: .bold))
+                .foregroundColor(Color.void.opacity(textAlpha))
+                .position(x: px, y: py)
+                .allowsHitTesting(false)
+        }
+        .contentShape(shape)
+        .onTapGesture {
+            if isSel { selected.remove(key) } else { selected.insert(key) }
+        }
+    }
+}
+
+struct WheelCenter: View {
+    let key: MusicalKey?
+    let center: CGPoint
+    let size: CGFloat
+
+    var body: some View {
+        let d: CGFloat = size * 0.38 - 4
+        return ZStack {
+            Circle().fill(Color.void).frame(width: d, height: d).position(center)
+            if let k = key {
+                VStack(spacing: 0) {
+                    Text(k.camelot).font(.system(size: 18, weight: .bold)).foregroundColor(CamelotWheel.color(k))
+                    Text(k.classic).font(.system(size: 10)).foregroundColor(Color.mist.opacity(0.6))
                 }
+                .position(center)
+            } else {
+                Image(systemName: "dial.medium").foregroundColor(Color.mist.opacity(0.3)).position(center)
             }
         }
     }
@@ -507,19 +553,20 @@ struct BigWaveform: View {
 
     var body: some View {
         GeometryReader { geo in
-            let frac = player.duration > 0 ? player.position / player.duration : 0
+            let frac: CGFloat = player.duration > 0 ? CGFloat(player.position / player.duration) : 0
+            let w: CGFloat = geo.size.width
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.35))
                 if let img = WaveformCache.shared.image(for: track, width: 1200, height: 80, store: library) {
                     Image(decorative: img, scale: 1).resizable().interpolation(.medium)
                         .opacity(0.45)
                     Image(decorative: img, scale: 1).resizable().interpolation(.medium)
-                        .mask(alignment: .leading) { Rectangle().frame(width: geo.size.width * frac) }
+                        .mask(alignment: .leading) { Rectangle().frame(width: w * frac) }
                 } else {
                     Text(library.analyzing.contains(track.id) ? "Analyserer …" : "Ingen waveform endnu")
                         .font(.caption).foregroundColor(.mist.opacity(0.4)).frame(maxWidth: .infinity)
                 }
-                Rectangle().fill(Color.white).frame(width: 2).offset(x: geo.size.width * frac - 1)
+                Rectangle().fill(Color.white).frame(width: 2).offset(x: w * frac - 1)
                 HStack {
                     Text(timeText(player.position))
                     Spacer()
@@ -529,7 +576,7 @@ struct BigWaveform: View {
                 .padding(.horizontal, 6).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
             }
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { v in player.seek(v.location.x / geo.size.width) })
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in player.seek(Double(v.location.x / w)) })
         }
     }
 
@@ -610,7 +657,8 @@ struct TrackListView: View {
     @EnvironmentObject var app: AppModel
     @EnvironmentObject var ui: LibraryUIState
     @EnvironmentObject var player: PlayerModel
-    @State private var sortOrder: [KeyPathComparator<LibTrack>] = [KeyPathComparator(\.sortAdded, order: .reverse)]
+    static let defaultSort: [KeyPathComparator<LibTrack>] = [KeyPathComparator(\LibTrack.sortAdded, order: .reverse)]
+    @State private var sortOrder: [KeyPathComparator<LibTrack>] = TrackListView.defaultSort
     @State private var targeted = false
     @State private var confirmForce: (UUID, URL, String)?
     @State private var newUsbPlaylist: (UsbDrive, [UUID])?
@@ -643,7 +691,8 @@ struct TrackListView: View {
             list = list.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.artist.localizedCaseInsensitiveContains(q) || $0.album.localizedCaseInsensitiveContains(q) }
         }
         // Playlister vises i deres egen rækkefølge, indtil man sorterer
-        if currentPlaylist != nil && sortOrder.first?.keyPath == \LibTrack.sortAdded { return list }
+        let unsorted: Bool = sortOrder == TrackListView.defaultSort
+        if currentPlaylist != nil && unsorted { return list }
         return list.sorted(using: sortOrder)
     }
 
@@ -939,9 +988,20 @@ struct UsbNodeTree: View {
     let depth: Int
     let prompt: (String, String, @escaping (String) -> Void) -> Void
 
+    /// Værn mod en beskadiget database, hvor en mappe peger på sig selv.
+    func usbChildren() -> [UsbNodeInfo] {
+        if depth > 24 { return [] }
+        let all: [UsbNodeInfo] = usb.contents[drive.id]?.nodes ?? []
+        let mine = all.filter { n in n.parent == parent && n.id != parent }
+        return mine.sorted { a, b in
+            if a.folder != b.folder { return a.folder }
+            return a.sort < b.sort
+        }
+    }
+
     var body: some View {
         // Værn mod en beskadiget database, hvor en mappe peger på sig selv
-        let nodes = depth > 24 ? [] : (usb.contents[drive.id]?.nodes ?? []).filter { $0.parent == parent && $0.id != parent }.sorted { ($0.folder ? 0 : 1, $0.sort) < ($1.folder ? 0 : 1, $1.sort) }
+        let nodes: [UsbNodeInfo] = usbChildren()
         let pending = usb.pending[drive.id] ?? []
         ForEach(nodes) { n in
             let added = pending.first { $0.kind == .addTo(n.id) }?.tracks.count ?? 0
