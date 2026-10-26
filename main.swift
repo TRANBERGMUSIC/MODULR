@@ -1,359 +1,12 @@
-// MODULR – finder "falske" 320 kbps-filer ved at analysere selve lyden.
-//
-// En MP3-encoder fjerner altid de højeste frekvenser, og grænsen afhænger af bitraten:
-//   128 kbps ≈ 16–17 kHz   192 kbps ≈ 18,5–19 kHz   256 kbps ≈ 19,5 kHz   320 kbps ≈ 20–20,5 kHz
-// Hvis en fil er konverteret fra 128 til 320, er den "kant" stadig ved ~16–17 kHz.
-// Appen måler hvor kanten ligger og sammenligner med den bitrate filen påstår at have.
+// MODULR – Your tools. One platform.
+// App-indgang, Bitrate-tjek-værktøjet og auto-opdatering.
+// Analyse- og matchlogikken ligger i Core/, "Find bedre version" i App/.
 
 import SwiftUI
 import AppKit
 import AVFoundation
 import AudioToolbox
-import Accelerate
 import UniformTypeIdentifiers
-
-// MARK: - Analyse
-
-enum Verdict {
-    case ok, suspicious, fake
-
-    var icon: String {
-        switch self {
-        case .ok: return "✅"
-        case .suspicious: return "⚠️"
-        case .fake: return "❌"
-        }
-    }
-
-    var word: String {
-        switch self {
-        case .ok: return "Ægte"
-        case .suspicious: return "Mistænkelig"
-        case .fake: return "Fake"
-        }
-    }
-}
-
-struct Tier {
-    let kbps: Int        // 9999 = fuld båndbredde (lossless-niveau)
-    let label: String
-}
-
-struct AnalysisResult {
-    let sampleRate: Double
-    let statedKbps: Int?
-    let cutoffHz: Double?
-    let tier: Tier
-    let verdict: Verdict
-    let verdictText: String
-    let spectrogram: CGImage?
-    let artist: String?
-    let title: String?
-}
-
-enum AnalyzerError: LocalizedError {
-    case tooShort, unreadable, silent
-
-    var errorDescription: String? {
-        switch self {
-        case .tooShort: return "Filen er for kort"
-        case .unreadable: return "Filen kunne ikke læses"
-        case .silent: return "Filen er stille"
-        }
-    }
-}
-
-enum Analyzer {
-    static let n = 8192
-    static let log2n: vDSP_Length = 13
-    static let frameCount = 300
-    static let bandHz = 100.0
-    static let losslessExtensions: Set<String> = ["wav", "aif", "aiff", "flac", "alac", "caf"]
-
-    static func analyze(url: URL) throws -> AnalysisResult {
-        let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        let sr = format.sampleRate
-        let channels = max(1, Int(format.channelCount))
-        let length = file.length
-        guard length > AVAudioFramePosition(n * 4) else { throw AnalyzerError.tooShort }
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)) else {
-            throw AnalyzerError.unreadable
-        }
-        guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { throw AnalyzerError.unreadable }
-        defer { vDSP_destroy_fftsetup(setup) }
-
-        let half = n / 2
-        let nyquist = sr / 2
-        let bandCount = Int(nyquist / bandHz)
-        let binHz = sr / Double(n)
-
-        var bandStart = [Int]()
-        var bandEnd = [Int]()
-        for b in 0..<bandCount {
-            let s = min(half - 1, Int(Double(b) * bandHz / binHz))
-            let e = max(s + 1, min(half, Int(Double(b + 1) * bandHz / binHz)))
-            bandStart.append(s)
-            bandEnd.append(e)
-        }
-
-        var window = [Float](repeating: 0, count: n)
-        vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
-
-        var accumulated = [Double](repeating: 0, count: half)
-        var counted = 0
-        var columns = [[Float]]()
-        var mono = [Float](repeating: 0, count: n)
-        var windowed = [Float](repeating: 0, count: n)
-        var real = [Float](repeating: 0, count: half)
-        var imag = [Float](repeating: 0, count: half)
-        var mags = [Float](repeating: 0, count: half)
-
-        let start = AVAudioFramePosition(Double(length) * 0.05)
-        let end = AVAudioFramePosition(Double(length) * 0.95) - AVAudioFramePosition(n)
-
-        for i in 0..<frameCount {
-            let pos = start + (end - start) * AVAudioFramePosition(i) / AVAudioFramePosition(frameCount - 1)
-            file.framePosition = pos
-            buffer.frameLength = 0
-            do {
-                try file.read(into: buffer, frameCount: AVAudioFrameCount(n))
-            } catch {
-                continue
-            }
-            let got = min(n, Int(buffer.frameLength))
-            guard got > 0, let data = buffer.floatChannelData else { continue }
-
-            for j in 0..<n { mono[j] = 0 }
-            for c in 0..<channels {
-                let ch = data[c]
-                for j in 0..<got { mono[j] += ch[j] }
-            }
-            let scale = 1.0 / Float(channels)
-            var sumSquares: Float = 0
-            for j in 0..<n {
-                let v = mono[j] * scale
-                sumSquares += v * v
-                windowed[j] = v * window[j]
-            }
-            let rms = (sumSquares / Float(got)).squareRoot()
-
-            real.withUnsafeMutableBufferPointer { rp in
-                imag.withUnsafeMutableBufferPointer { ip in
-                    var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
-                    windowed.withUnsafeBufferPointer { wp in
-                        wp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { cp in
-                            vDSP_ctoz(cp, 2, &split, 1, vDSP_Length(half))
-                        }
-                    }
-                    vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
-                    mags.withUnsafeMutableBufferPointer { mp in
-                        vDSP_zvmags(&split, 1, mp.baseAddress!, 1, vDSP_Length(half))
-                    }
-                }
-            }
-            mags[0] = 0 // DC/Nyquist-pakning fra zrip – irrelevant her
-
-            var column = [Float](repeating: 0, count: bandCount)
-            for b in 0..<bandCount {
-                var sum: Float = 0
-                for k in bandStart[b]..<bandEnd[b] { sum += mags[k] }
-                let meanPower = sum / Float(bandEnd[b] - bandStart[b])
-                column[b] = 10 * log10(meanPower + 1e-20)
-            }
-            columns.append(column)
-
-            if rms > 1e-3 {
-                for k in 0..<half { accumulated[k] += Double(mags[k]) }
-                counted += 1
-            }
-        }
-
-        guard counted > 0 else { throw AnalyzerError.silent }
-
-        // Gennemsnitligt spektrum i 100 Hz-bånd (dB)
-        var bandDB = [Double](repeating: -200, count: bandCount)
-        for b in 0..<bandCount {
-            var sum = 0.0
-            for k in bandStart[b]..<bandEnd[b] { sum += accumulated[k] }
-            let meanPower = sum / Double(bandEnd[b] - bandStart[b]) / Double(counted)
-            bandDB[b] = 10 * log10(meanPower + 1e-30)
-        }
-
-        let cutoff = findCutoff(bandDB: bandDB)
-        let tier = tierFor(cutoff: cutoff)
-        let stated = statedBitrate(url: url)
-        let lossless = losslessExtensions.contains(url.pathExtension.lowercased()) || (stated ?? 0) >= 600
-        let (verdict, text) = judge(tier: tier, stated: stated, lossless: lossless)
-        let tags = readTags(url: url)
-
-        return AnalysisResult(
-            sampleRate: sr,
-            statedKbps: stated,
-            cutoffHz: cutoff,
-            tier: tier,
-            verdict: verdict,
-            verdictText: text,
-            spectrogram: makeSpectrogram(columns: columns, bandCount: bandCount),
-            artist: tags.artist,
-            title: tags.title
-        )
-    }
-
-    /// Kunstner og titel: først fra filens tags, ellers gættet ud fra filnavnet ("Kunstner - Titel").
-    static func readTags(url: URL) -> (artist: String?, title: String?) {
-        func clean(_ s: String?) -> String? {
-            guard let t = s?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
-            return t
-        }
-        var artist: String?
-        var title: String?
-        var fileID: AudioFileID?
-        if AudioFileOpenURL(url as CFURL, .readPermission, 0, &fileID) == noErr, let fid = fileID {
-            var dict: Unmanaged<CFDictionary>?
-            var size = UInt32(MemoryLayout<Unmanaged<CFDictionary>?>.size)
-            if AudioFileGetProperty(fid, kAudioFilePropertyInfoDictionary, &size, &dict) == noErr,
-               let info = dict?.takeRetainedValue() as? [String: Any] {
-                artist = clean(info["artist"] as? String)
-                title = clean(info["title"] as? String)
-            }
-            AudioFileClose(fid)
-        }
-        if artist == nil || title == nil {
-            var base = url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
-            if let r = base.range(of: #"^\s*(\d{1,3}\s*[-.)]\s*|\d{2,3}\s+)"#, options: .regularExpression) {
-                base.removeSubrange(r)
-            }
-            let parts = base.components(separatedBy: " - ")
-            if parts.count >= 2 {
-                artist = artist ?? clean(parts[0])
-                title = title ?? clean(parts.dropFirst().joined(separator: " - "))
-            } else {
-                title = title ?? clean(base)
-            }
-        }
-        return (artist, title)
-    }
-
-    /// Finder den skarpe "kant" hvor encoderen har skåret diskanten af.
-    static func findCutoff(bandDB: [Double]) -> Double? {
-        let nb = bandDB.count
-        func mean(_ a: Int, _ b: Int) -> Double {
-            let lo = max(0, a), hi = min(nb, b)
-            guard hi > lo else { return -200 }
-            var s = 0.0
-            for i in lo..<hi { s += bandDB[i] }
-            return s / Double(hi - lo)
-        }
-        let first = Int(8000 / bandHz)
-        guard nb > first + 4 else { return nil }
-        var best = -1
-        var bestDrop = 0.0
-        for b in first..<(nb - 3) {
-            let drop = mean(b - 6, b - 1) - mean(b + 1, b + 6)
-            if drop > bestDrop {
-                bestDrop = drop
-                best = b
-            }
-        }
-        guard best >= 0, bestDrop >= 15 else { return nil }
-        let above = mean(best + 2, min(nb - 2, best + 30))
-        let below = mean(best - 15, best - 2)
-        guard below - above >= 20 else { return nil }
-        return Double(best) * bandHz
-    }
-
-    static func tierFor(cutoff: Double?) -> Tier {
-        guard let c = cutoff, c < 21000 else { return Tier(kbps: 9999, label: "Fuld båndbredde") }
-        switch c {
-        case 19900...: return Tier(kbps: 320, label: "320 kbps")
-        case 19300...: return Tier(kbps: 256, label: "256 kbps")
-        case 18300...: return Tier(kbps: 192, label: "192 kbps")
-        case 17300...: return Tier(kbps: 160, label: "160 kbps")
-        case 15900...: return Tier(kbps: 128, label: "128 kbps")
-        case 14000...: return Tier(kbps: 96, label: "96 kbps")
-        default: return Tier(kbps: 64, label: "≤ 64 kbps")
-        }
-    }
-
-    static func judge(tier: Tier, stated: Int?, lossless: Bool) -> (Verdict, String) {
-        if lossless {
-            if tier.kbps >= 9999 { return (.ok, "Ægte lossless – lyd i hele frekvensområdet") }
-            if tier.kbps >= 320 {
-                return (.suspicious, "Lossless-fil, men lyden stopper ved ca. 20 kHz – kan være lavet ud fra en 320 kbps MP3")
-            }
-            return (.fake, "Falsk lossless – lavet ud fra en MP3 på ca. \(tier.kbps) kbps")
-        }
-        guard let stated, stated > 0 else { return (.ok, "Målt kvalitet: \(tier.label)") }
-        if tier.kbps >= 320 || tier.kbps >= min(stated, 320) - 40 {
-            return (.ok, "Ægte – lyden passer til \(stated) kbps")
-        }
-        if Double(tier.kbps) <= Double(stated) * 0.7 {
-            return (.fake, "Fake – filen siger \(stated) kbps, men lyden svarer til ca. \(tier.kbps) kbps")
-        }
-        return (.suspicious, "Mistænkelig – filen siger \(stated) kbps, men lyden ligner ca. \(tier.kbps) kbps")
-    }
-
-    /// Den bitrate filen selv påstår at have (fra filens header).
-    static func statedBitrate(url: URL) -> Int? {
-        var fileID: AudioFileID?
-        guard AudioFileOpenURL(url as CFURL, .readPermission, 0, &fileID) == noErr, let fid = fileID else { return nil }
-        defer { AudioFileClose(fid) }
-        var bitRate: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioFileGetProperty(fid, kAudioFilePropertyBitRate, &size, &bitRate) == noErr, bitRate > 0 else { return nil }
-        return Int((Double(bitRate) / 1000).rounded())
-    }
-
-    static func makeSpectrogram(columns: [[Float]], bandCount: Int) -> CGImage? {
-        let w = columns.count
-        let h = bandCount
-        guard w > 0, h > 0 else { return nil }
-        var maxDB: Float = -300
-        for col in columns { for v in col where v > maxDB { maxDB = v } }
-        let minDB = maxDB - 90
-
-        // MODULR-paletten: Void → Ember → Amber → Mist
-        let stops: [(Float, Float, Float, Float)] = [
-            (0.00, 10, 10, 10),
-            (0.35, 80, 28, 0),
-            (0.60, 255, 107, 0),
-            (0.82, 255, 209, 102),
-            (1.00, 245, 245, 245),
-        ]
-        func color(_ t: Float) -> (UInt8, UInt8, UInt8) {
-            let x = min(1, max(0, t))
-            for i in 1..<stops.count where x <= stops[i].0 {
-                let a = stops[i - 1], b = stops[i]
-                let f = (x - a.0) / (b.0 - a.0)
-                return (UInt8(a.1 + (b.1 - a.1) * f), UInt8(a.2 + (b.2 - a.2) * f), UInt8(a.3 + (b.3 - a.3) * f))
-            }
-            return (255, 245, 180)
-        }
-
-        var pixels = [UInt8](repeating: 0, count: w * h * 4)
-        for x in 0..<w {
-            let col = columns[x]
-            for y in 0..<h {
-                let band = h - 1 - y
-                let t = (col[band] - minDB) / (maxDB - minDB)
-                let (r, g, b) = color(t)
-                let i = (y * w + x) * 4
-                pixels[i] = r
-                pixels[i + 1] = g
-                pixels[i + 2] = b
-                pixels[i + 3] = 255
-            }
-        }
-        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
-        return CGImage(
-            width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent
-        )
-    }
-}
 
 // MARK: - Model
 
@@ -394,7 +47,16 @@ func khz(_ hz: Double) -> String {
     String(format: "%.1f kHz", hz / 1000).replacingOccurrences(of: ".", with: ",")
 }
 
+enum Tool: String, CaseIterable, Identifiable {
+    case bitrate = "Bitrate-tjek"
+    case findBetter = "Find bedre version"
+    case artwork = "Artwork"
+    var id: String { rawValue }
+}
+
 final class AppModel: ObservableObject {
+    @Published var tool: Tool = .bitrate
+    @Published var findBetterRequest: URL?
     @Published var rows: [TrackRow] = []
     @Published var selection: TrackRow.ID?
 
@@ -499,7 +161,7 @@ extension Color {
 }
 
 struct BrandHeader: View {
-    let tool: String
+    @EnvironmentObject var app: AppModel
     private let logo: NSImage? = Bundle.main.image(forResource: "logo")
 
     var body: some View {
@@ -507,8 +169,9 @@ struct BrandHeader: View {
             if let logo {
                 Image(nsImage: logo)
                     .resizable()
+                    .interpolation(.high)
                     .scaledToFit()
-                    .frame(height: 38)
+                    .frame(height: 40)
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text("MODULR")
@@ -521,13 +184,24 @@ struct BrandHeader: View {
                     .foregroundColor(.mist.opacity(0.55))
             }
             Spacer()
-            Text(tool.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(2)
-                .foregroundColor(.ember)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .overlay(Capsule().stroke(Color.ember.opacity(0.6), lineWidth: 1))
+            HStack(spacing: 6) {
+                ForEach(Tool.allCases) { t in
+                    let active = app.tool == t
+                    Button {
+                        app.tool = t
+                    } label: {
+                        Text(t.rawValue.uppercased())
+                            .font(.system(size: 11, weight: .semibold))
+                            .tracking(1.5)
+                            .foregroundColor(active ? .void : .ember)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(active ? Color.ember : Color.clear))
+                            .overlay(Capsule().stroke(Color.ember.opacity(0.6), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -556,8 +230,6 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BrandHeader(tool: "Bitrate-tjek")
-            Divider()
             HStack(spacing: 12) {
                 Button("Tilføj filer eller mapper…") { openPanel() }
                     .buttonStyle(.borderedProminent)
@@ -713,6 +385,7 @@ struct ITunesTrack: Decodable {
 }
 
 struct FindBetterView: View {
+    @EnvironmentObject var app: AppModel
     let row: TrackRow
     @State private var artist: String
     @State private var title: String
@@ -734,6 +407,15 @@ struct FindBetterView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(row.result?.verdict == .ok ? "Find en version i endnu bedre kvalitet" : "Find en bedre version")
                     .font(.headline)
+                Button("Find gratis fra kunstneren …") {
+                    app.findBetterRequest = row.url
+                    app.tool = .findBetter
+                }
+                .buttonStyle(.borderedProminent)
+                Text("Genkender sangen og leder efter gratis downloads, kunstneren selv har lagt op.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 TextField("Kunstner", text: $artist)
                     .textFieldStyle(.roundedBorder)
                 TextField("Titel", text: $title)
@@ -1128,24 +810,64 @@ struct UpdateBanner: View {
 struct ModulrApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var updater = Updater()
+    @StateObject private var settings: FBSettings
+    @StateObject private var findBetter: FindBetterModel
+    @StateObject private var artwork = ArtworkModel()
+
+    init() {
+        let s = FBSettings()
+        _settings = StateObject(wrappedValue: s)
+        _findBetter = StateObject(wrappedValue: FindBetterModel(settings: s))
+    }
 
     var body: some Scene {
         WindowGroup("MODULR") {
-            VStack(spacing: 0) {
-                UpdateBanner()
-                ContentView()
-            }
-            .environmentObject(model)
-            .environmentObject(updater)
-            .frame(minWidth: 1100, minHeight: 700)
-            .background(Color.void)
-            .preferredColorScheme(.dark)
-            .tint(Color.ember)
-            .onAppear { updater.check() }
+            RootView()
+                .environmentObject(model)
+                .environmentObject(updater)
+                .environmentObject(settings)
+                .environmentObject(findBetter)
+                .environmentObject(artwork)
+                .frame(minWidth: 1100, minHeight: 720)
+                .background(Color.void)
+                .preferredColorScheme(.dark)
+                .tint(Color.ember)
+                .onAppear { updater.check() }
         }
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Søg efter opdateringer…") { updater.check(manual: true) }
+            }
+        }
+
+        Settings {
+            SettingsView()
+                .environmentObject(settings)
+                .preferredColorScheme(.dark)
+                .tint(Color.ember)
+        }
+    }
+}
+
+struct RootView: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var findBetter: FindBetterModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            UpdateBanner()
+            BrandHeader()
+            Divider()
+            switch model.tool {
+            case .bitrate: ContentView()
+            case .findBetter: FindBetterToolView()
+            case .artwork: ArtworkToolView()
+            }
+        }
+        .onChange(of: model.findBetterRequest) { url in
+            if let url {
+                findBetter.start(file: url)
+                model.findBetterRequest = nil
             }
         }
     }

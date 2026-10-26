@@ -28,7 +28,7 @@ fi
 rm -rf "$OUT"
 mkdir -p "$OUT/$APP/Contents/MacOS" "$OUT/$APP/Contents/Resources"
 xcrun swiftc -O -parse-as-library -target "$(uname -m)-apple-macos13.0" \
-  main.swift -o "$OUT/$APP/Contents/MacOS/MODULR"
+  main.swift App/*.swift Core/*.swift -o "$OUT/$APP/Contents/MacOS/MODULR"
 cp Info.plist "$OUT/$APP/Contents/Info.plist"
 
 if [ ! -f icon.png ] && [ -f icon.b64 ]; then base64 -D -i icon.b64 -o icon.png; fi
@@ -43,6 +43,24 @@ rm -rf "$ICONSET"
 
 if [ ! -f logo.png ] && [ -f logo.b64 ]; then base64 -D -i logo.b64 -o logo.png; fi
 [ -f logo.png ] && cp logo.png "$OUT/$APP/Contents/Resources/logo.png"
+
+# fpcalc (Chromaprint) til lyd-fingerprints – officiel udgivelse, tjekket med SHA-256
+FPCALC_VERSION="1.6.2"
+FPCALC_SHA256="53d9368f96017fb288d74f6ed4d928f7bbbfb2ff81e69b4ef67b6ceeb217d9b2"
+FPCALC_CACHE="$HOME/Library/Application Support/MODULR/fpcalc-$FPCALC_VERSION"
+if [ ! -x "$FPCALC_CACHE" ]; then
+  [ "$MODE" = "install" ] && echo "Henter fpcalc $FPCALC_VERSION (Chromaprint)..."
+  mkdir -p "$HOME/Library/Application Support/MODULR"
+  TMPD="$(mktemp -d)"
+  curl -fsSL -o "$TMPD/fpcalc.tgz" \
+    "https://github.com/acoustid/chromaprint/releases/download/v$FPCALC_VERSION/chromaprint-fpcalc-$FPCALC_VERSION-macos-universal.tar.gz"
+  echo "$FPCALC_SHA256  $TMPD/fpcalc.tgz" | shasum -a 256 -c - >/dev/null
+  tar -xzf "$TMPD/fpcalc.tgz" -C "$TMPD"
+  cp "$TMPD/chromaprint-fpcalc-$FPCALC_VERSION-macos-universal/fpcalc" "$FPCALC_CACHE"
+  chmod +x "$FPCALC_CACHE"
+  rm -rf "$TMPD"
+fi
+cp "$FPCALC_CACHE" "$OUT/$APP/Contents/Resources/fpcalc"
 
 codesign --force --deep -s - "$OUT/$APP" >/dev/null 2>&1 || true
 
