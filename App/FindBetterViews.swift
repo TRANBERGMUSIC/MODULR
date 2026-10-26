@@ -12,7 +12,7 @@ struct FindBetterToolView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button("Vælg en sang…") { pick() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.ember)
                 if let f = model.file {
                     Text(f.lastPathComponent)
                         .lineLimit(1)
@@ -24,27 +24,15 @@ struct FindBetterToolView: View {
                     Button("Start forfra") { model.reset() }
                 }
             }
-            .padding(10)
-            .background(Color.graphite)
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
 
             if model.file == nil {
-                VStack(spacing: 14) {
-                    Image(systemName: "sparkle.magnifyingglass")
-                        .font(.system(size: 54))
-                        .foregroundColor(.ember)
-                    Text("Træk en sang herind")
-                        .font(.title2)
-                    Text("MODULR genkender præcis den sang og finder steder, hvor kunstneren eller labelet selv giver den gratis i bedre kvalitet. Kun officielle kilder – ingen stream-ripping.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 520)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(dropTargeted ? Color.ember.opacity(0.12) : Color.void)
+                DropZone(icon: "sparkle.magnifyingglass", title: "Træk en sang herind",
+                         subtitle: "MODULR genkender præcis den sang og finder steder, hvor kunstneren eller labelet selv giver den gratis i bedre kvalitet. Kun officielle kilder – ingen stream-ripping.",
+                         targeted: dropTargeted, buttonTitle: "Vælg en sang…", action: pick)
             } else {
                 StepBar(current: model.step, busy: model.busy)
-                Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if let e = model.errorText {
@@ -97,7 +85,8 @@ struct FindBetterToolView: View {
                             PurchaseSection()
                         }
                     }
-                    .padding(16)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -155,16 +144,22 @@ struct StepBar: View {
                     else if done { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
                     Text(s.title).font(.system(size: 11, weight: active ? .semibold : .regular))
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .foregroundColor(active ? .void : (done ? .mist : .secondary))
-                .background(Capsule().fill(active ? Color.ember : (done ? Color.ember.opacity(0.25) : Color.graphite)))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .foregroundColor(active ? .void : (done ? .mist : .mist.opacity(0.45)))
+                .background(
+                    Capsule().fill(active ? AnyShapeStyle(Color.emberGradient)
+                                   : AnyShapeStyle(done ? Color.ember.opacity(0.22) : Color.white.opacity(0.04)))
+                )
+                .overlay(Capsule().stroke(active ? Color.clear : Color.hairline, lineWidth: 1))
+                if s != FBStep.allCases.last {
+                    Rectangle().fill(done ? Color.ember.opacity(0.5) : Color.hairline).frame(width: 10, height: 1)
+                }
             }
             Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.void)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 4)
     }
 }
 
@@ -173,16 +168,15 @@ struct Card<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(2)
-                .foregroundColor(.ember)
-            content
+        Panel {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(2)
+                    .foregroundStyle(Color.emberGradient)
+                content
+            }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.graphite))
     }
 }
 
@@ -192,9 +186,10 @@ struct Banner: View {
 
     var body: some View {
         Text(text)
-            .padding(10)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.18)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(color.opacity(0.14)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(color.opacity(0.35), lineWidth: 1))
     }
 }
 
@@ -317,7 +312,7 @@ struct CandidateList: View {
                     }
                     Spacer()
                     Button(c.raw.kind == .directDownload ? "Hent" : "Åbn") { model.choose(c) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.ember)
                         .disabled(model.busy)
                 }
                 .padding(.vertical, 4)

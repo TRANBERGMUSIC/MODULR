@@ -43,6 +43,7 @@ rm -rf "$ICONSET"
 
 if [ ! -f logo.png ] && [ -f logo.b64 ]; then base64 -D -i logo.b64 -o logo.png; fi
 [ -f logo.png ] && cp logo.png "$OUT/$APP/Contents/Resources/logo.png"
+[ -f hero.jpg ] && cp hero.jpg "$OUT/$APP/Contents/Resources/hero.jpg"
 
 # fpcalc (Chromaprint) til lyd-fingerprints – officiel udgivelse, tjekket med SHA-256
 FPCALC_VERSION="1.6.2"

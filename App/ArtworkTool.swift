@@ -154,23 +154,16 @@ struct ManualArtworkView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Button("Tilføj filer eller mapper…") { pickFiles() }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.ember)
                     Spacer()
                     if !model.rows.isEmpty { Button("Ryd") { model.rows = [] } }
                 }
-                .padding(10)
-                .background(Color.graphite)
-                Divider()
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
                 if model.rows.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "waveform.circle")
-                            .font(.system(size: 48))
-                            .foregroundColor(.ember)
-                        Text("Træk WAV-, AIFF- eller MP3-filer herind")
-                            .font(.title3)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(filesTargeted ? Color.ember.opacity(0.12) : Color.void)
+                    DropZone(icon: "waveform.circle", title: "Træk WAV-, AIFF- eller MP3-filer herind",
+                             subtitle: "Vælg derefter et billede til højre – det lægges på alle filerne som CDJ-venligt JPEG.",
+                             targeted: filesTargeted)
                 } else {
                     List(model.rows) { r in
                         HStack {
@@ -182,6 +175,12 @@ struct ManualArtworkView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                .scrollContentBackground(.hidden)
+                .background(Color.white.opacity(0.02))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
                     }
                 }
             }
@@ -199,8 +198,10 @@ struct ManualArtworkView: View {
             // Billede
             VStack(spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(imageTargeted ? Color.ember.opacity(0.15) : Color.graphite)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(imageTargeted ? Color.ember.opacity(0.15) : Color.white.opacity(0.04))
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(imageTargeted ? Color.ember : Color.white.opacity(0.12), style: StrokeStyle(lineWidth: 1.2, dash: [7, 6]))
                     if let img = model.preview {
                         Image(nsImage: img)
                             .resizable()
@@ -231,7 +232,7 @@ struct ManualArtworkView: View {
                 Button(model.busy ? "Skriver…" : "Tilføj artwork til \(model.rows.count) fil\(model.rows.count == 1 ? "" : "er")") {
                     model.apply()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.ember)
                 .disabled(model.jpeg == nil || model.rows.isEmpty || model.busy)
                 Text("Billedet gemmes som JPEG (maks. 800×800), som Pioneer kræver. I rekordbox: højreklik på sporene → \"Reload Tag\" før du eksporterer til USB.")
                     .font(.caption)
@@ -242,7 +243,7 @@ struct ManualArtworkView: View {
             }
             .padding(20)
             .frame(width: 330)
-            .background(Color.void)
+            .background(Color.white.opacity(0.02))
         }
     }
 

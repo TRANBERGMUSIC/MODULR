@@ -161,55 +161,6 @@ extension Color {
     static let graphite = Color(red: 26 / 255, green: 26 / 255, blue: 26 / 255)
 }
 
-struct BrandHeader: View {
-    @EnvironmentObject var app: AppModel
-    private let logo: NSImage? = Bundle.main.image(forResource: "logo")
-
-    var body: some View {
-        HStack(spacing: 14) {
-            if let logo {
-                Image(nsImage: logo)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(height: 40)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("MODULR")
-                    .font(.system(size: 20, weight: .semibold))
-                    .tracking(5)
-                    .foregroundColor(.mist)
-                Text("YOUR TOOLS. ONE PLATFORM.")
-                    .font(.system(size: 9, weight: .medium))
-                    .tracking(3)
-                    .foregroundColor(.mist.opacity(0.55))
-            }
-            Spacer()
-            HStack(spacing: 6) {
-                ForEach(Tool.allCases) { t in
-                    let active = app.tool == t
-                    Button {
-                        app.tool = t
-                    } label: {
-                        Text(t.rawValue.uppercased())
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(1.5)
-                            .foregroundColor(active ? .void : .ember)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(active ? Color.ember : Color.clear))
-                            .overlay(Capsule().stroke(Color.ember.opacity(0.6), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color.void)
-    }
-}
-
 enum Filter: Hashable { case all, problems }
 
 struct ContentView: View {
@@ -231,41 +182,33 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button("Tilføj filer eller mapper…") { openPanel() }
-                    .buttonStyle(.borderedProminent)
-                Picker("", selection: $filter) {
-                    Text("Alle").tag(Filter.all)
-                    Text("Kun fakes og mistænkelige").tag(Filter.problems)
+                    .buttonStyle(.ember)
+                if !model.rows.isEmpty {
+                    Picker("", selection: $filter) {
+                        Text("Alle").tag(Filter.all)
+                        Text("Kun problemer").tag(Filter.problems)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 200)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
                 Spacer()
                 if !model.rows.isEmpty {
-                    Text("\(model.doneCount)/\(model.rows.count) analyseret · \(model.fakeCount) fake · \(model.suspiciousCount) mistænkelige")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                    StatTile(value: "\(model.doneCount)/\(model.rows.count)", label: "Analyseret")
+                    StatTile(value: "\(model.fakeCount)", label: "Fake", accent: model.fakeCount > 0)
+                    StatTile(value: "\(model.suspiciousCount)", label: "Mistænkelige")
                     Button("Eksportér CSV…") { exportCSV() }
                     Button("Ryd") { model.clear() }
                 }
             }
-            .padding(10)
-            .background(Color.graphite)
-
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
 
             if model.rows.isEmpty {
-                VStack(spacing: 14) {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 54))
-                        .foregroundColor(.ember)
-                    Text("Træk dine filer eller mapper herind")
-                        .font(.title2)
-                    Text("Appen lytter til selve lyden og afslører filer, der er opkonverteret fra lav bitrate.")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(dropTargeted ? Color.ember.opacity(0.12) : Color.void)
+                DropZone(icon: "waveform.badge.magnifyingglass", title: "Træk dine filer eller mapper herind",
+                         subtitle: "MODULR lytter til selve lyden og afslører filer, der er opkonverteret fra lav bitrate – fx 128 kbps gemt som 320.",
+                         targeted: dropTargeted, buttonTitle: "Vælg filer…", action: openPanel)
             } else {
                 VSplitView {
                     Table(visibleRows, selection: $model.selection) {
@@ -285,6 +228,8 @@ struct ContentView: View {
                             .width(min: 200, ideal: 380)
                     }
                     .frame(minHeight: 180)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.white.opacity(0.02))
 
                     Group {
                         if let row = selectedRow {
@@ -297,6 +242,10 @@ struct ContentView: View {
                     }
                     .frame(minHeight: 360)
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
             }
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted) { providers in
@@ -412,7 +361,7 @@ struct FindBetterView: View {
                     app.findBetterRequest = row.url
                     app.tool = .findBetter
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.ember)
                 Text("Genkender sangen og leder efter gratis downloads, kunstneren selv har lagt op.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -647,6 +596,22 @@ final class Updater: ObservableObject {
     }
 
     @Published var status: Status = .idle
+    @Published var lastChecked: Date?
+    private var timer: Timer?
+    private var activeObserver: NSObjectProtocol?
+
+    /// Tjek ved start, hver 30. minut og når du skifter tilbage til appen (højst hvert 5. minut).
+    func startAutomaticChecks() {
+        guard timer == nil else { return }
+        check()
+        timer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in self?.check() }
+        activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                                                object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if let last = self.lastChecked, Date().timeIntervalSince(last) < 5 * 60 { return }
+            self.check()
+        }
+    }
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -658,22 +623,50 @@ final class Updater: ObservableObject {
 
     func check(manual: Bool = false) {
         if case .working = status { return }
+        if case .available = status, !manual { return }
         if manual { set(.checking) }
-        guard let url = URL(string: "https://raw.githubusercontent.com/\(Self.owner)/\(Self.repo)/\(Self.branch)/VERSION") else { return }
-        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard error == nil, code == 200, let data, let text = String(data: data, encoding: .utf8) else {
-                self.set(manual ? .failed("Kunne ikke tjekke for opdateringer. Tjek internetforbindelsen.") : .idle)
+        // GitHubs API giver den aktuelle fil med det samme (raw-adressen kan være op til 5 min gammel)
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.owner)/\(Self.repo)/contents/VERSION?ref=\(Self.branch)")!,
+                             cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 15)
+        req.setValue("application/vnd.github.raw", forHTTPHeaderField: "Accept")
+        req.setValue("MODULR/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        fetchVersion(req) { [weak self] latest in
+            guard let self else { return }
+            if let latest {
+                self.handle(latest: latest, manual: manual)
                 return
             }
-            let latest = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if latest.compare(self.currentVersion, options: .numeric) == .orderedDescending {
-                self.set(.available(latest))
-            } else {
-                self.set(manual ? .upToDate : .idle)
+            // Reserve: raw-adressen med cache-buster
+            let ts = Int(Date().timeIntervalSince1970)
+            let raw = URLRequest(url: URL(string: "https://raw.githubusercontent.com/\(Self.owner)/\(Self.repo)/\(Self.branch)/VERSION?t=\(ts)")!,
+                                 cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 15)
+            self.fetchVersion(raw) { latest in
+                if let latest {
+                    self.handle(latest: latest, manual: manual)
+                } else {
+                    self.set(manual ? .failed("Kunne ikke tjekke for opdateringer. Tjek internetforbindelsen.") : .idle)
+                }
             }
+        }
+    }
+
+    private func fetchVersion(_ req: URLRequest, done: @escaping (String?) -> Void) {
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard error == nil, code == 200, let data, let text = String(data: data, encoding: .utf8) else { done(nil); return }
+            let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            done(v.range(of: #"^\d+(\.\d+)*$"#, options: .regularExpression) != nil ? v : nil)
         }.resume()
+    }
+
+    private func handle(latest: String, manual: Bool) {
+        DispatchQueue.main.async { self.lastChecked = Date() }
+        if latest.compare(currentVersion, options: .numeric) == .orderedDescending {
+            set(.available(latest))
+            DispatchQueue.main.async { NSApp.requestUserAttention(.informationalRequest) }
+        } else {
+            set(manual ? .upToDate : .idle)
+        }
     }
 
     func install() {
@@ -770,10 +763,11 @@ struct UpdateBanner: View {
             }
         case .available(let version):
             bar {
-                Text("🎉 Ny version \(version) er klar (du har \(updater.currentVersion)).")
+                Text("Ny version \(version) er klar – du har \(updater.currentVersion).").fontWeight(.medium)
                 Spacer()
                 Button("Senere") { updater.status = .idle }
                 Button("Opdatér nu") { updater.install() }
+                    .buttonStyle(.ember)
                     .keyboardShortcut(.defaultAction)
             }
         case .working(let message):
@@ -794,14 +788,19 @@ struct UpdateBanner: View {
     }
 
     func bar<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) { content() }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.ember.opacity(0.18))
-            Divider()
-        }
+        HStack(spacing: 10) { content() }
+            .font(.system(size: 13))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(LinearGradient(colors: [Color.ember.opacity(0.22), Color.ember.opacity(0.08)],
+                                         startPoint: .leading, endPoint: .trailing))
+            )
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.ember.opacity(0.35), lineWidth: 1))
+            .padding(.horizontal, 24)
+            .padding(.top, 38)
     }
 }
 
@@ -837,12 +836,14 @@ struct ModulrApp: App {
                 .environmentObject(accounts)
                 .environmentObject(library)
                 .environmentObject(autoFill)
-                .frame(minWidth: 1100, minHeight: 720)
+                .buttonStyle(.ghost)
+                .frame(minWidth: 1180, minHeight: 760)
                 .background(Color.void)
                 .preferredColorScheme(.dark)
                 .tint(Color.ember)
-                .onAppear { updater.check() }
+                .onAppear { updater.startAutomaticChecks() }
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Søg efter opdateringer…") { updater.check(manual: true) }
@@ -854,31 +855,6 @@ struct ModulrApp: App {
                 .environmentObject(settings)
                 .preferredColorScheme(.dark)
                 .tint(Color.ember)
-        }
-    }
-}
-
-struct RootView: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var findBetter: FindBetterModel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            UpdateBanner()
-            BrandHeader()
-            Divider()
-            switch model.tool {
-            case .bitrate: ContentView()
-            case .findBetter: FindBetterToolView()
-            case .artwork: ArtworkToolView()
-            case .accounts: AccountsView()
-            }
-        }
-        .onChange(of: model.findBetterRequest) { url in
-            if let url {
-                findBetter.start(file: url)
-                model.findBetterRequest = nil
-            }
         }
     }
 }

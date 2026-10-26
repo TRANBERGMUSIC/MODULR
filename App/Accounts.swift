@@ -217,7 +217,7 @@ struct AccountsView: View {
                                 Button("Log ud") { accounts.logout(s) }
                             }
                             Button(accounts.isLoggedIn(s) ? "Åbn" : "Log ind") { loginService = s }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.ember)
                         }
                         .padding(.vertical, 4)
                         Divider()
@@ -250,7 +250,7 @@ struct AccountsView: View {
                             Button(accounts.connecting ? "Venter på SoundCloud …" : "Forbind min SoundCloud-konto") {
                                 accounts.connectSoundCloud(settings: settings)
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.ember)
                             .disabled(!settings.soundCloudConfigured || accounts.connecting)
                             Spacer()
                         }
@@ -275,11 +275,11 @@ struct AccountsView: View {
                         .foregroundColor(settings.keys.acoustID.isEmpty ? .amber : .ember)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+            .frame(maxWidth: 820, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color.void)
         .onAppear {
             accounts.refresh()
             accounts.loadSoundCloudUser(settings: settings)
@@ -309,7 +309,7 @@ struct LoginBrowserSheet: View {
                 Button("Annullér") { onClose() }
                     .keyboardShortcut(.cancelAction)
                 Button("Færdig – jeg er logget ind") { onDone() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.ember)
             }
             .padding(10)
             Divider()

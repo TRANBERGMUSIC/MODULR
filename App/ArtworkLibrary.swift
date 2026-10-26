@@ -326,9 +326,8 @@ struct ArtworkToolView: View {
                 .frame(width: 360)
                 Spacer()
             }
-            .padding(10)
-            .background(Color.graphite)
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
             switch mode {
             case .autofill: AutoFillView()
             case .library: ArtworkLibraryView()
@@ -347,29 +346,19 @@ struct AutoFillView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button("Vælg mapper eller filer…") { pick() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.ember)
                     .disabled(auto.busy)
                 Toggle("Hent manglende covers fra iTunes", isOn: $auto.useITunes)
                 Spacer()
                 if auto.busy { ProgressView().controlSize(.small) }
                 if let s = auto.summary { Text(s).foregroundStyle(.secondary) }
             }
-            .padding(10)
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
             if auto.rows.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "photo.stack")
-                        .font(.system(size: 48))
-                        .foregroundColor(.ember)
-                    Text("Træk din musikmappe herind")
-                        .font(.title3)
-                    Text("MODULR gemmer coveret fra alle filer, der har et (også dine gamle MP3'er), og lægger det på de filer, der mangler – fx dine WAV-filer. Finder den ikke et cover lokalt, kan den hente det fra iTunes.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 520)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(targeted ? Color.ember.opacity(0.12) : Color.void)
+                DropZone(icon: "photo.stack", title: "Træk din musikmappe herind",
+                         subtitle: "MODULR gemmer coveret fra alle filer, der har et (også dine gamle MP3'er), og lægger det på de filer, der mangler – fx dine WAV-filer. Finder den ikke et cover lokalt, hentes det fra iTunes.",
+                         targeted: targeted, buttonTitle: "Vælg mappe…", action: pick)
             } else {
                 List(auto.rows) { r in
                     HStack {
@@ -379,6 +368,12 @@ struct AutoFillView: View {
                             Text(r.status).font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                .scrollContentBackground(.hidden)
+                .background(Color.white.opacity(0.02))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
                 }
             }
         }
@@ -436,8 +431,8 @@ struct ArtworkLibraryView: View {
                 Spacer()
                 if let m = message { Text(m).foregroundStyle(.secondary) }
             }
-            .padding(10)
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
             if library.entries.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "photo.on.rectangle.angled")
@@ -455,11 +450,10 @@ struct ArtworkLibraryView: View {
                             ArtworkTile(entry: e, message: $message)
                         }
                     }
-                    .padding(16)
+                    .padding(24)
                 }
             }
         }
-        .background(Color.void)
     }
 }
 
@@ -485,7 +479,9 @@ struct ArtworkTile: View {
                 }
             }
             .frame(width: 170, height: 170)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
             .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
                 guard let p = providers.first else { return false }
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
