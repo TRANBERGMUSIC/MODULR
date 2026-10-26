@@ -108,44 +108,57 @@ enum WaveShape {
         return Gradient(stops: stops)
     }
 
-    /// Hele sangen som rekordbox' preview: tegnet nedefra, én pixel-søjle ad gangen med den højeste top
-    /// i søjlen (ingen udglatning – spidst og detaljeret) og mættede farver fra frekvensbåndene.
+    /// Hele sangen i samme stil som den store waveform: spejlet om midten og samme mættede farver.
+    /// Højden er det gennemsnitlige niveau i søjlen (ikke den højeste top), normaliseret til sangens
+    /// højeste 2 % – så kick, breaks og drops kan ses i stedet for en massiv væg.
     static func preview(bands: [UInt8], peaks: [UInt8], width: Int, height: Int) -> CGImage? {
         let cols = bands.count / 3
         guard cols > 1, width > 1, height > 1 else { return nil }
         let duration = Double(cols) / MusicAnalyzer.waveformRate
         let pcount = peaks.count
-        var px = [UInt8](repeating: 0, count: width * height * 4)
+        var level = [Double](repeating: 0, count: width)
+        var colors = [(Double, Double, Double)?](repeating: nil, count: width)
         for x in 0..<width {
             let ta = Double(x) / Double(width) * duration
             let tb = Double(x + 1) / Double(width) * duration
-            // Højde: største top i søjlen
-            var amp = 0.0
+            var sum = 0.0, n = 0.0
             if pcount > 0 {
                 let a = max(0, Int(ta * MusicAnalyzer.peakRate))
                 let b = min(pcount, max(a + 1, Int(tb * MusicAnalyzer.peakRate)))
-                if a < pcount { for k in a..<b { amp = max(amp, Double(peaks[k])) } }
+                if a < pcount { for k in a..<b { sum += Double(peaks[k]); n += 1 } }
             }
-            // Farve: gennemsnit af båndene i søjlen
             let ca = max(0, Int(ta * MusicAnalyzer.waveformRate))
             let cb = min(cols, max(ca + 1, Int(tb * MusicAnalyzer.waveformRate)))
             var lo = 0.0, mi = 0.0, hi = 0.0, top = 0.0
             if ca < cols {
                 for c in ca..<cb {
                     lo += Double(bands[c * 3]); mi += Double(bands[c * 3 + 1]); hi += Double(bands[c * 3 + 2])
-                    top = max(top, Double(max(bands[c * 3], max(bands[c * 3 + 1], bands[c * 3 + 2]))))
+                    top += Double(max(bands[c * 3], max(bands[c * 3 + 1], bands[c * 3 + 2])))
                 }
+                top /= Double(cb - ca)
             }
-            if pcount == 0 { amp = top }
-            guard amp > 1, let c = WaveColor.rgb(lo, mi, hi, floor: 0.18, boost: true) else { continue }
-            let h = max(1, Int((amp / 255 * Double(height)).rounded()))
-            for yy in 0..<min(h, height) {
-                // Lidt lysere top, mørkere bund – giver dybde som i rekordbox
-                let shade = 0.78 + 0.22 * Double(yy) / Double(max(1, h))
-                let i = ((height - 1 - yy) * width + x) * 4
-                px[i] = UInt8(min(255, c.r * shade * 255))
-                px[i + 1] = UInt8(min(255, c.g * shade * 255))
-                px[i + 2] = UInt8(min(255, c.b * shade * 255))
+            level[x] = n > 0 ? sum / n : top
+            if let c = WaveColor.rgb(lo, mi, hi, floor: 0.1, boost: true) { colors[x] = (c.r, c.g, c.b) }
+        }
+        let sorted = level.sorted()
+        let ref = max(1, sorted[min(width - 1, Int(Double(width) * 0.98))])
+        var px = [UInt8](repeating: 0, count: width * height * 4)
+        let mid = Double(height) / 2
+        for x in 0..<width {
+            guard let c = colors[x] else { continue }
+            let amp = min(1, level[x] / ref) * 0.95
+            let half = amp * mid
+            guard half >= 0.5 else { continue }
+            let y0 = max(0, Int((mid - half).rounded()))
+            let y1 = min(height, Int((mid + half).rounded()))
+            for y in y0..<y1 {
+                // Lidt lysere mod midten giver dybde
+                let edge = abs(Double(y) + 0.5 - mid) / max(1, half)
+                let shade = 1.0 - 0.22 * edge
+                let i = (y * width + x) * 4
+                px[i] = UInt8(min(255, c.0 * shade * 255))
+                px[i + 1] = UInt8(min(255, c.1 * shade * 255))
+                px[i + 2] = UInt8(min(255, c.2 * shade * 255))
                 px[i + 3] = 255
             }
         }
@@ -153,7 +166,7 @@ enum WaveShape {
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                        space: CGColorSpaceCreateDeviceRGB(),
                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     /// Hele sangen som billede, tegnet nedefra (overblik og tabel) – kantudglattet med glidende farver.
