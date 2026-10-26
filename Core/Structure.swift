@@ -104,6 +104,38 @@ enum SongStructure {
         if let lastDrop = phrases.lastIndex(where: { $0.kind == .drop }) {
             for i in (lastDrop + 1)..<phrases.count where phrases[i].kind == .main { phrases[i].kind = .outro }
         }
+        // Præcise grænser: fraserne giver grænsen ±4 takter – den rigtige takt er der hvor bas og energi
+        // skifter mest (2 takter før mod 2 takter efter). Så rammer et drop på takt 26 også takt 26.
+        func change(_ b: Int) -> Double {
+            guard b >= 2, b + 2 <= nbars else { return -1 }
+            let l1 = (lo[b - 2] + lo[b - 1]) / 2, l2 = (lo[b] + lo[b + 1]) / 2
+            let e1 = (en[b - 2] + en[b - 1]) / 2, e2 = (en[b] + en[b + 1]) / 2
+            return abs(l2 - l1) / loRef + abs(e2 - e1) / enRef
+        }
+        var merged = [Phrase]()
+        for ph in phrases {
+            if let last = merged.last, last.kind == ph.kind {
+                merged[merged.count - 1].end = ph.end
+            } else {
+                merged.append(ph)
+            }
+        }
+        if merged.count > 1 {
+            for i in 1..<merged.count {
+                let b = merged[i].start
+                let lowLimit = merged[i - 1].start + 1
+                let highLimit = merged[i].end - 1
+                var best = b, bestScore = change(b)
+                for c in max(lowLimit, b - 4)...max(max(lowLimit, b - 4), min(highLimit, b + 4)) {
+                    let sc = change(c)
+                    if sc > bestScore + 1e-9 { best = c; bestScore = sc }
+                }
+                merged[i].start = best
+                merged[i - 1].end = best
+            }
+        }
+        phrases = merged
+
         // Slå ens fraser sammen og nummerér (1. drop, 2. drop …)
         var out = [SongSection]()
         var counts = [SectionKind: Int]()

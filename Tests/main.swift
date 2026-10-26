@@ -711,6 +711,27 @@ do {
     check("1. drop starter i takt 25", secs.first { $0.kind == .drop && $0.ordinal == 1 }?.startBar == 24)
     check("2. drop er nummereret", secs.contains { $0.kind == .drop && $0.ordinal == 2 })
 
+    // Skæve grænser: drop på takt 26 (ikke på en 8-takters grænse) skal findes præcist
+    let plan2: [(SectionKind, Int)] = [(.intro, 16), (.buildup, 9), (.drop, 15), (.breakdown, 16), (.drop, 16)]
+    var bands2 = [UInt8]()
+    for (kind, bars) in plan2 {
+        for b in 0..<bars {
+            let ramp = Double(b) / Double(bars)
+            let v: (Double, Double, Double)
+            switch kind {
+            case .buildup: v = (15, 80 + 120 * ramp, 60 + 140 * ramp)
+            case .drop: v = (255, 220, 200)
+            case .breakdown: v = (15, 200, 120)
+            default: v = (150, 110, 120)
+            }
+            for _ in 0..<barCols { bands2 += [UInt8(v.0), UInt8(v.1), UInt8(v.2)] }
+        }
+    }
+    let secs2 = SongStructure.analyze(bands: bands2, bpm: bpm, firstBeat: 0, duration: Double(bands2.count / 3) / 150)
+    let d1 = secs2.first { $0.kind == .drop && $0.ordinal == 1 }
+    check("Drop på takt 26 rammes præcist", d1?.startBar == 25, "fundet takt \((d1?.startBar ?? -1) + 1)")
+    check("Breakdown på takt 41 rammes præcist", secs2.first { $0.kind == .breakdown }?.startBar == 40)
+
     // Regler
     let barSec = 60 / bpm * 4
     let drop1 = CueRule(target: .drop).resolve(sections: secs, bpm: bpm, firstBeat: 0, duration: duration) ?? -1

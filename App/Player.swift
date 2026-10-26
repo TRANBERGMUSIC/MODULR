@@ -35,9 +35,20 @@ struct EQSettings: Codable, Equatable {
         unit.globalGain = 0
     }
 
+    /// Kun forstærkningen – filtertyper og frekvenser røres ikke (så skifter lyden ikke med et hak).
+    static func setGains(_ unit: AVAudioUnitEQ, _ g: [Float]) {
+        let b = unit.bands
+        guard b.count >= 3, g.count >= 3 else { return }
+        if b[0].gain != g[0] { b[0].gain = g[0] }
+        if b[1].gain != g[1] { b[1].gain = g[1] }
+        if b[2].gain != g[2] { b[2].gain = g[2] }
+    }
+
+    var gains: [Float] { [Float(low), Float(mid), Float(high)] }
+
     var summary: String {
         func f(_ v: Double) -> String { String(format: "%+.1f", v) }
-        return "Bas \(f(low)) · Mellem \(f(mid)) · Diskant \(f(high)) dB"
+        return "Lows \(f(low)) · Mids \(f(mid)) · High \(f(high)) dB"
     }
 }
 
@@ -417,16 +428,33 @@ final class PlayerModel: ObservableObject {
 
     @Published var editingRegion: UUID?
     private var appliedEQ: EQSettings?
+    private var currentGains: [Float] = [0, 0, 0]
+    private var targetGains: [Float] = [0, 0, 0]
 
     /// EQ for det sted der spilles lige nu: et EQ-område hvis vi er i et, ellers EQ for hele sangen.
+    /// Under afspilning glider knapperne blødt over (ca. 0,1 s) i stedet for at hoppe.
     func applyActiveEQ() {
         let regions = liveTrack?.eqRegions ?? []
         let active: EQSettings = regions.first(where: { $0.contains(position) })
             .map { EQSettings(low: $0.low, mid: $0.mid, high: $0.high) } ?? eq
         if active != appliedEQ {
-            active.configure(eqUnit)
             appliedEQ = active
+            targetGains = active.gains
+            if !playing {
+                currentGains = targetGains
+                EQSettings.setGains(eqUnit, currentGains)
+            }
         }
+        smoothEQ()
+    }
+
+    private func smoothEQ() {
+        guard currentGains != targetGains else { return }
+        for i in 0..<3 {
+            let d = targetGains[i] - currentGains[i]
+            currentGains[i] = abs(d) < 0.05 ? targetGains[i] : currentGains[i] + d * 0.45
+        }
+        EQSettings.setGains(eqUnit, currentGains)
     }
 
     /// Nærmeste slag (quantize, som Q på en CDJ).

@@ -579,13 +579,18 @@ struct SectionStrip: View {
                     let x0: CGFloat = w * CGFloat(max(0, s.start) / dur)
                     let x1: CGFloat = w * CGFloat(min(dur, s.end) / dur)
                     let c = s.kind.rgb
+                    // Sektionen der spiller nu lyser op
+                    let active: Bool = player.position >= s.start && player.position < s.end
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 3).fill(Color(red: c.0, green: c.1, blue: c.2).opacity(0.35))
+                        RoundedRectangle(cornerRadius: 3).fill(Color(red: c.0, green: c.1, blue: c.2).opacity(active ? 0.95 : 0.3))
+                        if active {
+                            RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.8), lineWidth: 1)
+                        }
                         if x1 - x0 > 44 {
                             Text(s.ordinal > 1 && (s.kind == .drop || s.kind == .breakdown || s.kind == .buildup)
                                  ? "\(s.kind.title) \(s.ordinal)" : s.kind.title)
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(Color(red: c.0, green: c.1, blue: c.2))
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(active ? Color.black : Color(red: c.0, green: c.1, blue: c.2))
                                 .lineLimit(1)
                                 .padding(.leading, 4)
                         }
@@ -1014,9 +1019,9 @@ struct EQPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             regionBar
             HStack(spacing: 18) {
-                Knob(title: "Bas", value: binding(\.low, base: \.low))
-                Knob(title: "Mellem", value: binding(\.mid, base: \.mid))
-                Knob(title: "Diskant", value: binding(\.high, base: \.high))
+                Knob(title: "Lows", value: binding(\.low, base: \.low))
+                Knob(title: "Mids", value: binding(\.mid, base: \.mid))
+                Knob(title: "High", value: binding(\.high, base: \.high))
                 VStack(alignment: .leading, spacing: 6) {
                     Text(editing == nil ? "EQ for hele sangen – høres med det samme." :
                             "EQ kun i det valgte område (\(barText(editing!))) – høres når afspilningen er der.")
