@@ -33,13 +33,13 @@ struct PlayerPanel: View {
                                 DetailWaveform(track: t, zoom: $zoom, gridMode: mode == .grid, showSuggestions: mode == .cues)
                                     .frame(height: 104)
                                 VStack(spacing: 2) {
-                                    OverviewWaveform(track: t, zoom: zoom).frame(height: 30)
+                                    OverviewWaveform(track: t, zoom: zoom).frame(height: 38)
                                     BarRuler(track: t).frame(height: 14)
                                     SectionStrip().frame(height: 14)
                                 }
                             }
                             DJMMeter()
-                                .frame(width: 52, height: 174)
+                                .frame(width: 52, height: 182)
                         }
                         switch mode {
                         case .grid: GridEditBar(track: t)
@@ -172,7 +172,10 @@ struct DetailWaveform: View {
         GeometryReader { geo in
             let w: Double = Double(geo.size.width)
             ZStack(alignment: .topLeading) {
-                Canvas { ctx, size in draw(ctx, size) }
+                // Tegnes i skærmens takt (60/120 Hz) med den præcise afspilningsposition – ingen hak når der er zoomet ind
+                TimelineView(.animation(minimumInterval: nil, paused: !player.playing)) { _ in
+                    Canvas { ctx, size in draw(ctx, size, pos: player.livePosition()) }
+                }
                 hud
             }
             .background(Color.black)
@@ -264,11 +267,11 @@ struct DetailWaveform: View {
             }
     }
 
-    func draw(_ ctx: GraphicsContext, _ size: CGSize) {
+    func draw(_ ctx: GraphicsContext, _ size: CGSize, pos: Double) {
         let w = Double(size.width), h = Double(size.height)
         let bands = player.bands
         let secsPerPx = zoom / max(1, w)
-        let t0 = player.position - zoom / 2
+        let t0 = pos - zoom / 2
         let mid = h / 2
 
         // 2) Waveformen som i rekordbox: toppe i høj opløsning, én skærm-pixel ad gangen, farven fra
@@ -467,9 +470,10 @@ struct OverviewWaveform: View {
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.35))
                 if let img = player.overviewImage(width: 2400, height: 80) {
-                    Image(decorative: img, scale: 1).resizable().interpolation(.high).opacity(0.45)
+                    // Fuld farve som den store waveform; det der er spillet, dæmpes (som rekordbox)
                     Image(decorative: img, scale: 1).resizable().interpolation(.high)
-                        .mask(alignment: .leading) { Rectangle().frame(width: max(0, w * frac)) }
+                    Rectangle().fill(Color.black.opacity(0.5))
+                        .frame(width: max(0, w * frac))
                 }
                 if let zoom, hover {
                     // Holdes inden for waveformen – også i starten og slutningen af sangen

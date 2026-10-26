@@ -585,6 +585,9 @@ final class PlayerModel: ObservableObject {
         advancedTo = next.id
     }
 
+    /// Den præcise position lige nu (til tegning i skærmens takt), ikke kun den der opdateres 30 gange i sekundet.
+    func livePosition() -> Double { playing ? currentTime() : position }
+
     private func currentTime() -> Double {
         guard playing, let nt = node.lastRenderTime, let pt = node.playerTime(forNodeTime: nt) else {
             return Double(startFrame) / sampleRate
