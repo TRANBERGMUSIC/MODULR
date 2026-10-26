@@ -379,25 +379,19 @@ final class PlayerModel: ObservableObject {
         return max(0, fb + ((t - fb) / beat).rounded() * beat)
     }
 
-    /// CUE trykkes ned:
-    /// spiller → tilbage til cue-punktet og stop; stoppet et andet sted → nyt cue-punkt her;
-    /// stoppet på cue-punktet → afspil så længe knappen holdes (cue-preview).
+    /// CUE trykkes ned (som på en CDJ):
+    /// spiller → tilbage til cue-punktet; stoppet et andet sted → nyt cue-punkt her (på nærmeste slag).
+    /// Så længe knappen holdes, spiller den fra cue-punktet – slip, og den hopper tilbage og stopper.
     func cueDown() {
-        guard track != nil else { return }
-        if playing && !cuePreviewing {
+        guard track != nil, !cuePreviewing else { return }
+        if playing {
             pause()
-            seek(seconds: cuePoint)
-            return
+        } else if !atCue {
+            cuePoint = quantized(position)
         }
-        if !playing {
-            if !atCue {
-                cuePoint = quantized(position)
-                seek(seconds: cuePoint)
-            } else {
-                cuePreviewing = true
-                play()
-            }
-        }
+        seek(seconds: cuePoint)
+        cuePreviewing = true
+        play()
     }
 
     /// CUE slippes: under preview → tilbage til cue-punktet og stop.

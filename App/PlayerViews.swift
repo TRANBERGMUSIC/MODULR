@@ -272,7 +272,7 @@ struct DetailWaveform: View {
             let s = max(1, Double(scale))
             let px = 1 / s
             let n = Int(w * s)
-            let halfH = h / 2 - 3
+            let halfH = h / 2 - 9
             let rate = MusicAnalyzer.waveformRate
             let prate = MusicAnalyzer.peakRate
             let pcount = peaks.count
@@ -328,15 +328,31 @@ struct DetailWaveform: View {
                      at: CGPoint(x: w / 2, y: mid))
         }
 
-        // Beatgrid oven på waveformen – roligt: zoomet ud kun takter (og fraser), zoomet ind også hvert slag
+        // Beatgrid som i rekordbox: grå slag-streger med små grå mærker øverst og nederst,
+        // hvide takt-streger med røde trekanter. Fraser (hver 8. takt) får orange trekanter og taktnummer.
         if let bpm = track.bpm, bpm > 0 {
             let beat = 60 / bpm
             let fb = firstBeat
             var k = Int(floor((t0 - fb) / beat))
             let pxPerBeat = beat / secsPerPx
-            let showBeats = pxPerBeat >= 28            // ca. 16 s synligt eller tættere på
-            let showBars = pxPerBeat * 4 >= 14
+            let showBeats = pxPerBeat >= 22
+            let showBars = pxPerBeat * 4 >= 12
             let line = 1 / max(1, Double(scale))
+            let red = Color(red: 0.92, green: 0.18, blue: 0.15)
+            func triangles(_ x: Double, _ color: Color) {
+                var top = Path()
+                top.move(to: CGPoint(x: x - 4.5, y: 0))
+                top.addLine(to: CGPoint(x: x + 4.5, y: 0))
+                top.addLine(to: CGPoint(x: x, y: 6))
+                top.closeSubpath()
+                var bottom = Path()
+                bottom.move(to: CGPoint(x: x - 4.5, y: h))
+                bottom.addLine(to: CGPoint(x: x + 4.5, y: h))
+                bottom.addLine(to: CGPoint(x: x, y: h - 6))
+                bottom.closeSubpath()
+                ctx.fill(top, with: .color(color))
+                ctx.fill(bottom, with: .color(color))
+            }
             while true {
                 let tb = fb + Double(k) * beat
                 if tb > t0 + zoom { break }
@@ -344,17 +360,18 @@ struct DetailWaveform: View {
                     let x = (tb - t0) / secsPerPx
                     let inBar = BeatGrid.mod(k, BeatGrid.beatsPerBar)
                     let inPhrase = BeatGrid.mod(k, BeatGrid.beatsPerBar * BeatGrid.barsPerPhrase)
-                    if inPhrase == 0 {
-                        ctx.fill(Path(CGRect(x: x - line, y: 0, width: line * 2, height: h)), with: .color(Color.ember.opacity(0.85)))
-                        let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
-                        ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember),
-                                 at: CGPoint(x: x + 3, y: h - 7), anchor: .leading)
-                    } else if inBar == 0 && showBars {
-                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.45)))
-                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: 4)), with: .color(Color(red: 0.95, green: 0.3, blue: 0.25)))
+                    if inBar == 0 && (showBars || inPhrase == 0) {
+                        ctx.fill(Path(CGRect(x: x - line, y: 6, width: line * 2, height: h - 12)), with: .color(Color.white.opacity(0.9)))
+                        triangles(x, inPhrase == 0 ? Color.ember : red)
+                        if inPhrase == 0 {
+                            let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
+                            ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember),
+                                     at: CGPoint(x: x + 4, y: h - 13), anchor: .leading)
+                        }
                     } else if inBar != 0 && showBeats {
-                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.22)))
-                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: 3)), with: .color(Color.white.opacity(0.55)))
+                        ctx.fill(Path(CGRect(x: x - line / 2, y: 6, width: line, height: h - 12)), with: .color(Color(white: 0.6).opacity(0.55)))
+                        ctx.fill(Path(CGRect(x: x - 1.5, y: 0, width: 3, height: 4)), with: .color(Color(white: 0.6)))
+                        ctx.fill(Path(CGRect(x: x - 1.5, y: h - 4, width: 3, height: 4)), with: .color(Color(white: 0.6)))
                     }
                 }
                 k += 1
@@ -377,11 +394,12 @@ struct DetailWaveform: View {
             let x = (at - t0) / secsPerPx
             let c = HotCue.rgb[letter] ?? (1, 1, 1)
             let color = Color(red: c.0, green: c.1, blue: c.2)
-            ctx.fill(Path(CGRect(x: x - 0.75, y: 0, width: 1.5, height: h)), with: .color(color))
-            let tag = Path(roundedRect: CGRect(x: x, y: 2, width: 15, height: 15), cornerRadius: 3)
+            ctx.fill(Path(CGRect(x: x - 0.75, y: 14, width: 1.5, height: h - 14)), with: .color(color))
+            // Mærket står midt over stregen, så det er tydeligt præcis hvilket slag cue'en ligger på
+            let tag = Path(roundedRect: CGRect(x: x - 7.5, y: 0, width: 15, height: 15), cornerRadius: 3)
             ctx.fill(tag, with: .color(color))
             ctx.draw(Text(letter).font(.system(size: 11, weight: .heavy)).foregroundColor(.black),
-                     at: CGPoint(x: x + 7.5, y: 9.5), anchor: .center)
+                     at: CGPoint(x: x, y: 7.5), anchor: .center)
         }
 
         // Cue-punktet (CUE-knappen): orange trekant nederst
