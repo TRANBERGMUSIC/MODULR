@@ -167,7 +167,69 @@ final class LibraryStore: ObservableObject {
     // MARK: Mapper → playlister
 
     /// Trukket ind eller valgt: mapper bliver til playlister/mapper (som på disken), løse filer lægges i `playlist`.
+    /// Sange fra et USB-stik (eller et andet eksternt drev) kopieres til Musik/MODULR/Fra USB først –
+    /// så biblioteket ikke peger på et stik, der bliver taget ud.
+    static var fromUsbFolder: URL {
+        let music = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask)[0]
+        let d = music.appendingPathComponent("MODULR/Fra USB", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    static func isExternal(_ u: URL) -> Bool {
+        let p = u.standardizedFileURL.path
+        return p.hasPrefix("/Volumes/") && !p.hasPrefix("/Volumes/Macintosh HD/")
+    }
+
+    /// Kopierer sangene fra USB'en til computeren og sætter dem i biblioteket (og i `playlist`).
+    /// Ligger sangen allerede i biblioteket (samme filnavn), bruges den i stedet for en ny kopi.
+    func importFromUsb(_ files: [URL], into playlist: UUID? = nil) {
+        var seenPaths = Set<String>()
+        let audio = files.filter { Self.audioExts.contains($0.pathExtension.lowercased()) && seenPaths.insert($0.standardizedFileURL.path).inserted }
+        guard !audio.isEmpty else { return }
+        lastMessage = "Kopierer \(audio.count) sang\(audio.count == 1 ? "" : "e") fra USB'en …"
+        let known = index.tracks
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            var existing = [UUID]()
+            var copied = [URL]()
+            var failed = 0
+            for src in audio {
+                let name = src.deletingPathExtension().lastPathComponent.lowercased()
+                if let t = known.first(where: { $0.url.deletingPathExtension().lastPathComponent.lowercased() == name && fm.fileExists(atPath: $0.path) }) {
+                    existing.append(t.id)
+                    continue
+                }
+                var dest = Self.fromUsbFolder.appendingPathComponent(src.lastPathComponent)
+                if fm.fileExists(atPath: dest.path) {
+                    let a = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? -1
+                    let b = (try? fm.attributesOfItem(atPath: src.path)[.size] as? Int) ?? -2
+                    if a != b {
+                        dest = Self.fromUsbFolder.appendingPathComponent(
+                            src.deletingPathExtension().lastPathComponent + " (USB)." + src.pathExtension)
+                    }
+                }
+                if !fm.fileExists(atPath: dest.path) {
+                    do { try fm.copyItem(at: src, to: dest) } catch { failed += 1; continue }
+                }
+                copied.append(dest)
+            }
+            DispatchQueue.main.async {
+                let ids = self.importFiles(copied, into: playlist)
+                if let pl = playlist, !existing.isEmpty { self.add(existing, to: pl) }
+                var msg = "\(copied.count + existing.count) sange fra USB'en er i biblioteket"
+                if !existing.isEmpty { msg += " (\(existing.count) lå der i forvejen)" }
+                if failed > 0 { msg += " – \(failed) kunne ikke kopieres" }
+                self.lastMessage = msg
+                _ = ids
+            }
+        }
+    }
+
     func importDropped(_ urls: [URL], into playlist: UUID? = nil) {
+        let external = urls.filter { Self.isExternal($0) && !$0.hasDirectoryPath }
+        if !external.isEmpty { importFromUsb(external, into: playlist) }
+        let urls = urls.filter { !(Self.isExternal($0) && !$0.hasDirectoryPath) }
         var files = [URL]()
         var dirs = [URL]()
         for u in urls {

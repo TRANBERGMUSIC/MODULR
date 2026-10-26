@@ -145,7 +145,7 @@ final class UsbStore: ObservableObject {
     private func watch() {
         for d in drives {
             // Vores egen skrivning og igangværende læsning tæller ikke
-            if writing.contains(d.id) || loading.contains(d.id) { continue }
+            if writing.contains(d.id) || loading.contains(d.id) || editing.contains(d.id) { continue }
             let sig = signature(d)
             guard !sig.isEmpty else { continue }
             guard let old = seen[d.id] else { seen[d.id] = sig; continue }
@@ -301,6 +301,83 @@ final class UsbStore: ObservableObject {
                 self.load(d)
             }
         }
+    }
+
+    // MARK: Ret i det der allerede ligger på USB'en (udføres med det samme – med backup og kontrol)
+
+    @Published var editing: Set<String> = []
+
+    func edit(_ d: UsbDrive, _ plan: [String: Any], done text: String) {
+        guard !writing.contains(d.id), !editing.contains(d.id) else {
+            message = "Vent – MODULR er i gang med \(d.name)."
+            return
+        }
+        editing.insert(d.id)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: String
+            do {
+                let input = try JSONSerialization.data(withJSONObject: plan)
+                let data = try self.run(["edit", d.url.path], input: input)
+                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if obj?["ok"] as? Bool == true {
+                    result = text
+                } else {
+                    result = "⛔️ USB'en blev ikke ændret: \(obj?["error"] as? String ?? String(data: data, encoding: .utf8) ?? "ukendt fejl")"
+                }
+            } catch {
+                result = "⛔️ USB'en blev ikke ændret: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self.editing.remove(d.id)
+                self.message = result
+                self.load(d)
+            }
+        }
+    }
+
+    func removeFromPlaylist(_ d: UsbDrive, playlist: Int, tracks: [Int]) {
+        edit(d, ["remove": [["playlist": playlist, "tracks": tracks]]],
+             done: "\(tracks.count) sang\(tracks.count == 1 ? "" : "e") fjernet fra playlisten (de ligger stadig på USB'en).")
+    }
+
+    func addExisting(_ d: UsbDrive, playlist: Int, tracks: [Int]) {
+        let have = Set(contents[d.id]?.nodes?.first { $0.id == playlist }?.tracks ?? [])
+        let new = tracks.filter { !have.contains($0) }
+        guard !new.isEmpty else { message = "Sangene ligger allerede i den playliste."; return }
+        edit(d, ["add": [["playlist": playlist, "tracks": new]]], done: "\(new.count) sang\(new.count == 1 ? "" : "e") lagt i playlisten.")
+    }
+
+    func move(_ d: UsbDrive, from: Int, to: Int, tracks: [Int]) {
+        guard from != to else { return }
+        edit(d, ["remove": [["playlist": from, "tracks": tracks]], "add": [["playlist": to, "tracks": tracks]]],
+             done: "\(tracks.count) sang\(tracks.count == 1 ? "" : "e") flyttet.")
+    }
+
+    func reorder(_ d: UsbDrive, playlist: Int, order: [Int]) {
+        edit(d, ["order": [["playlist": playlist, "tracks": order]]], done: "Rækkefølgen er gemt på USB'en.")
+    }
+
+    func deleteTracks(_ d: UsbDrive, tracks: [Int]) {
+        if let cur = PlayerModel.shared.track?.path, Set(tracks).contains(where: { id in
+            contents[d.id]?.tracks?.first { $0.id == id }?.fileURL(root: d.url).path == cur
+        }) {
+            PlayerModel.shared.release(under: d.url)
+        }
+        edit(d, ["delete": tracks], done: "\(tracks.count) sang\(tracks.count == 1 ? "" : "e") slettet fra \(d.name).")
+    }
+
+    /// Alle almindelige playlister på USB'en med deres sti (til "Flyt til" / "Læg i").
+    func playlistPaths(_ d: UsbDrive) -> [(id: Int, path: String)] {
+        let nodes = contents[d.id]?.nodes ?? []
+        let byID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        func path(_ n: UsbNodeInfo) -> String {
+            var parts = [n.name]
+            var p = n.parent
+            var guardN = 0
+            while p != 0, let q = byID[p], guardN < 24 { parts.insert(q.name, at: 0); p = q.parent; guardN += 1 }
+            return parts.joined(separator: " › ")
+        }
+        return nodes.filter { !$0.folder }.map { ($0.id, path($0)) }.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
     /// Skub sikkert ud: spørger først hvis der er noget der ikke er skrevet, og slipper sange fra USB'en i afspilleren.

@@ -370,6 +370,8 @@ struct NodeRow: View {
                     } else if s.hasPrefix("tracks:"), !node.isFolder {
                         let ids = s.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) }
                         library.add(ids, to: node.id)
+                    } else if s.hasPrefix("usbtracks:"), !node.isFolder {
+                        library.importFromUsb(UsbDragItem.files(s), into: node.id)
                     }
                 }
                 return true
@@ -1236,7 +1238,15 @@ struct UsbNodeTree: View {
             .dropDestination(for: String.self) { items, _ in
                 guard !n.folder else { return false }
                 let ids = items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
-                usb.add(ids, to: drive, existing: n.id)
+                if !ids.isEmpty { usb.add(ids, to: drive, existing: n.id) }
+                // Sange fra USB'en selv → læg dem i denne playliste (som at trække i rekordbox)
+                var usbIDs = [Int]()
+                for s in items {
+                    if let r = UsbDragItem.decode(s) {
+                        if r.drive == drive.id { usbIDs += r.ids } else { usb.message = "Træk sange mellem to USB'er via biblioteket (træk dem først over i en playliste i MODULR)." }
+                    }
+                }
+                if !usbIDs.isEmpty { usb.addExisting(drive, playlist: n.id, tracks: Array(Set(usbIDs))) }
                 return true
             }
             .modMenu(title: n.name) { usbFolderMenu(n) }
@@ -1375,7 +1385,7 @@ struct UsbPlaylistView: View {
             let pendingIDs = nodeID.flatMap { id in usb.pending[d.id]?.first { $0.kind == .addTo(id) }?.tracks } ?? []
             VStack(spacing: 0) {
                 UsbHeader(drive: d, title: node?.name ?? d.name)
-                Table(list, selection: $selection) {
+                Table(of: UsbTrackInfo.self, selection: $selection) {
                     TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
                         .width(30)
                     TableColumn("") { (t: UsbTrackInfo) in UsbCoverCell(track: t, root: d.url) }
@@ -1388,9 +1398,30 @@ struct UsbPlaylistView: View {
                         .width(48)
                     TableColumn("Længde") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.timeText(t.duration), alpha: 0.8) }
                         .width(56)
+                } rows: {
+                    ForEach(list) { t in
+                        TableRow(t)
+                            .draggable(UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url)))
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .alternatingRowBackgrounds(.disabled)
+                .background(RightClickArea { row, e in
+                    guard let r = row, r < list.count else { return false }
+                    let id = list[r].id
+                    if !selection.contains(id) { selection = [id] }
+                    let ids = list.filter { selection.contains($0.id) }.map(\.id)
+                    let t = list[r]
+                    ModMenu.shared.show(menu(ids, drive: d, list: list), at: NSEvent.mouseLocation, event: e,
+                                        title: ids.count > 1 ? "\(ids.count) sange" : t.title,
+                                        subtitle: ids.count > 1 ? d.name : t.artist)
+                    return true
+                })
+                .onDeleteCommand {
+                    let ids = list.filter { selection.contains($0.id) }.map(\.id)
+                    guard !ids.isEmpty else { return }
+                    if let pid = nodeID { usb.removeFromPlaylist(d, playlist: pid, tracks: ids) } else { confirmDelete(ids, drive: d, list: list) }
+                }
                 .contextMenu(forSelectionType: Int.self) { _ in
                     EmptyView()
                 } primaryAction: { ids in
@@ -1427,6 +1458,116 @@ struct UsbPlaylistView: View {
         } else {
             Text("USB'en er ikke sat i").foregroundColor(.mist.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Det der trækkes: "usbtracks:<id,id>@<drev>" (til playlister i MODULR) og selve filen (til Finder).
+    func dragText(_ t: UsbTrackInfo, drive d: UsbDrive) -> String {
+        let ids = selection.contains(t.id) ? Array(selection) : [t.id]
+        return UsbDragItem.encode(ids: ids, drive: d.id)
+    }
+
+    func menu(_ ids: [Int], drive d: UsbDrive, list: [UsbTrackInfo]) -> [MMItem] {
+        var items = [MMItem]()
+        let files = list.filter { ids.contains($0.id) }.map { $0.fileURL(root: d.url) }
+        let others = usb.playlistPaths(d).filter { $0.id != nodeID }
+        items.append(.submenu("Læg i playliste", icon: "text.badge.plus", others.map { p in
+            MMItem.action(p.path, icon: "music.note.list") { usb.addExisting(d, playlist: p.id, tracks: ids) }
+        }))
+        if let pid = nodeID {
+            items.append(.submenu("Flyt til playliste", icon: "arrow.right.square", others.map { p in
+                MMItem.action(p.path, icon: "music.note.list") { usb.move(d, from: pid, to: p.id, tracks: ids) }
+            }))
+            let order = list.map(\.id)
+            items.append(.submenu("Rækkefølge", icon: "arrow.up.arrow.down", [
+                .action("Øverst", icon: "arrow.up.to.line") { usb.reorder(d, playlist: pid, order: ids + order.filter { !ids.contains($0) }) },
+                .action("Én op", icon: "arrow.up") { usb.reorder(d, playlist: pid, order: Self.shift(order, ids, by: -1)) },
+                .action("Én ned", icon: "arrow.down") { usb.reorder(d, playlist: pid, order: Self.shift(order, ids, by: 1)) },
+                .action("Nederst", icon: "arrow.down.to.line") { usb.reorder(d, playlist: pid, order: order.filter { !ids.contains($0) } + ids) },
+            ]))
+        }
+        items.append(.divider)
+        items.append(.action("Importér til biblioteket", icon: "square.and.arrow.down") { library.importFromUsb(files) })
+        items.append(.action("Kopiér til computeren…", icon: "folder") { Self.copyToComputer(files) })
+        items.append(.action("Vis i Finder", icon: "magnifyingglass") { NSWorkspace.shared.activateFileViewerSelecting(files) })
+        items.append(.divider)
+        if let pid = nodeID {
+            items.append(.action("Fjern fra playlisten", icon: "minus.circle") { usb.removeFromPlaylist(d, playlist: pid, tracks: ids) })
+        }
+        items.append(.action("Slet fra USB'en…", icon: "trash", destructive: true) { confirmDelete(ids, drive: d, list: list) })
+        return items
+    }
+
+    func confirmDelete(_ ids: [Int], drive d: UsbDrive, list: [UsbTrackInfo]) {
+        let name = ids.count == 1 ? "\"\(list.first { $0.id == ids[0] }?.title ?? "sangen")\"" : "\(ids.count) sange"
+        Dialogs.shared.confirm("Slet \(name) fra \(d.name)?",
+                               message: "Sangen fjernes fra alle playlister på USB'en, og filen slettes fra stikket. Dit bibliotek på computeren røres ikke.",
+                               icon: "trash.fill", button: "Slet", destructive: true) {
+            selection = []
+            usb.deleteTracks(d, tracks: ids)
+        }
+    }
+
+    /// Flyt de valgte ét trin op/ned, men behold deres indbyrdes rækkefølge.
+    static func shift(_ order: [Int], _ ids: [Int], by step: Int) -> [Int] {
+        var o = order
+        let sel = Set(ids)
+        let idxs = o.indices.filter { sel.contains(o[$0]) }
+        for i in (step < 0 ? idxs : idxs.reversed()) {
+            let j = i + step
+            guard j >= 0, j < o.count, !sel.contains(o[j]) else { continue }
+            o.swapAt(i, j)
+        }
+        return o
+    }
+
+    static func copyToComputer(_ files: [URL]) {
+        let p = NSOpenPanel()
+        p.canChooseFiles = false
+        p.canChooseDirectories = true
+        p.canCreateDirectories = true
+        p.prompt = "Kopiér hertil"
+        p.message = "Vælg hvor sangene skal ligge på computeren"
+        guard p.runModal() == .OK, let dir = p.url else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var n = 0
+            for f in files {
+                let dest = dir.appendingPathComponent(f.lastPathComponent)
+                if !FileManager.default.fileExists(atPath: dest.path), (try? FileManager.default.copyItem(at: f, to: dest)) != nil { n += 1 }
+            }
+            let count = n
+            DispatchQueue.main.async { UsbStore.shared.message = "\(count) sang\(count == 1 ? "" : "e") kopieret til \(dir.lastPathComponent)." }
+        }
+    }
+}
+
+/// Et træk fra USB-listen: tekst til MODULRs playlister og selve filen til Finder/skrivebordet.
+struct UsbDragItem: Transferable {
+    let text: String
+    let file: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation(exporting: \.text)
+        ProxyRepresentation(exporting: \.file)
+    }
+
+    static func encode(ids: [Int], drive: String) -> String {
+        "usbtracks:" + ids.map(String.init).joined(separator: ",") + "@" + drive
+    }
+
+    /// (drev-id, track-id'er) fra en trukket tekst.
+    static func decode(_ s: String) -> (drive: String, ids: [Int])? {
+        guard s.hasPrefix("usbtracks:") else { return nil }
+        let body = s.dropFirst("usbtracks:".count)
+        guard let at = body.firstIndex(of: "@") else { return nil }
+        let ids = body[..<at].split(separator: ",").compactMap { Int($0) }
+        return (String(body[body.index(after: at)...]), ids)
+    }
+
+    /// Filerne på USB'en for en trukket tekst.
+    static func files(_ s: String) -> [URL] {
+        guard let r = decode(s), let d = UsbStore.shared.drives.first(where: { $0.id == r.drive }) else { return [] }
+        let tracks = UsbStore.shared.contents[r.drive]?.tracks ?? []
+        return r.ids.compactMap { id in tracks.first { $0.id == id }?.fileURL(root: d.url) }
     }
 }
 

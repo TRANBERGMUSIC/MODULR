@@ -239,6 +239,53 @@ class Pdb(object):
                 "filename": s[19], "analyze_path": s[14], "date_added": s[10], "u3": u3, "u4": u4,
                 "bitrate": bitrate, "sample_rate": sr, "depth": depth, "file_type": ftype, "comment": s[16]}
 
+    def delete_rows(self, t, pred):
+        """Markér rækker som slettede (som rekordbox gør): tilstedeværelses-bit ryddes og sidens tæller
+        tælles ned. Rækkens bytes bliver liggende, men læses ikke længere. Returnerer antal slettede."""
+        deleted = 0
+        for p in self.table_pages(t):
+            h = self.page_header(p)
+            if not self.is_data_page(h):
+                continue
+            o = self.page_off(p)
+            end = o + self.page_size
+            n = h["num_rows"]
+            gone = 0
+            for g in range((n + 15) // 16):
+                base = end - g * ROW_GROUP_SIZE
+                present, tx = struct.unpack_from("<HH", self.data, base - 4)
+                for r in range(16):
+                    ri = g * 16 + r
+                    if ri >= n or not (present >> r) & 1:
+                        continue
+                    pos = o + HEAP_START + struct.unpack_from("<H", self.data, base - 6 - 2 * r)[0]
+                    row = self.read_track(pos) if t == T_TRACKS else self.read_named(pos, t)
+                    if pred(row):
+                        present &= ~(1 << r)
+                        tx &= ~(1 << r)
+                        gone += 1
+                struct.pack_into("<HH", self.data, base - 4, present, tx)
+            if gone:
+                self.set_row_counts(p, n, max(0, h["num_valid"] - gone))
+                self.data[o + 0x1B] |= 0x10                                    # "indeholder slettede rækker"
+                struct.pack_into("<I", self.data, o + 0x10, self.sequence)
+                deleted += gone
+        return deleted
+
+    def renumber_playlist(self, playlist_id, order=None):
+        """Giv playlistens sange fortløbende numre 1, 2, 3 … (i `order` – en liste af track-id'er – hvis givet)."""
+        rows = []
+        for pos in self.rows(T_PLAYLIST_ENTRIES):
+            e = self.read_named(pos, T_PLAYLIST_ENTRIES)
+            if e["playlist_id"] == playlist_id:
+                rows.append((e["index"], e["track_id"], pos))
+        rows.sort()
+        if order:
+            rank = {tid: i for i, tid in enumerate(order)}
+            rows.sort(key=lambda r: (rank.get(r[1], len(rank)), r[0]))
+        for i, (_idx, _tid, pos) in enumerate(rows):
+            struct.pack_into("<I", self.data, pos, i + 1)
+
     def set_analyze_path(self, track_id, new_path):
         """Ret sporets analyze_path på stedet (kun når den nye sti har samme længde – så intet andet flytter sig)."""
         for pos in self.rows(T_TRACKS):
@@ -873,6 +920,123 @@ def safe_name(s, fallback):
     return (s or fallback)[:80]
 
 
+MAX_BACKUPS = 5
+
+
+def _backup(root):
+    """Backup af hele rekordbox-mappen – de 5 nyeste gemmes, ældre ryddes op."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = os.path.join(root, "PIONEER")
+    backup = os.path.join(base, "MODULR-backup-" + stamp)
+    if os.path.exists(backup):
+        backup += "-%d" % os.getpid()
+    shutil.copytree(os.path.join(base, "rekordbox"), backup)
+    old = sorted(d for d in os.listdir(base) if d.startswith("MODULR-backup-"))
+    for d in old[:-MAX_BACKUPS]:
+        shutil.rmtree(os.path.join(base, d), ignore_errors=True)
+    return backup
+
+
+def _save_atomic(p, data):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".modulr-")
+    with os.fdopen(fd, "wb") as f:
+        f.write(bytes(data))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
+def edit_usb(root, plan):
+    """Ændringer i det der allerede ligger på USB'en – udføres med det samme (med backup og kontrol).
+    plan = {
+      "remove":   [{"playlist": id, "tracks": [track-id, …]}],   # fjern fra playliste (sangen bliver på USB'en)
+      "add":      [{"playlist": id, "tracks": [track-id, …]}],   # sæt eksisterende USB-sange i en playliste
+      "order":    [{"playlist": id, "tracks": [track-id, …]}],   # ny rækkefølge
+      "delete":   [track-id, …]                                   # slet sangen helt fra USB'en
+    }"""
+    p = pdb_path(root)
+    with open(p, "rb") as f:
+        original = f.read()
+    db = Pdb(original)
+    old = Pdb(original)
+    tracks = {t["id"]: t for t in db.all(T_TRACKS)}
+    playlists = {n["id"] for n in db.all(T_PLAYLIST_TREE) if not n.get("folder")}
+    log = []
+    touched = set()
+
+    removed_pairs = set()                 # (playlist, track)
+    for op in plan.get("remove", []):
+        pid = int(op["playlist"])
+        ids = {int(x) for x in op.get("tracks", [])}
+        n = db.delete_rows(T_PLAYLIST_ENTRIES, lambda e: e["playlist_id"] == pid and e["track_id"] in ids)
+        removed_pairs |= {(pid, t) for t in ids}
+        touched.add(pid)
+        log.append("Fjernet %d fra playliste %d" % (n, pid))
+
+    delete = {int(x) for x in plan.get("delete", []) if int(x) in tracks}
+    files_to_remove = []
+    if delete:
+        pls = {e["playlist_id"] for e in db.all(T_PLAYLIST_ENTRIES) if e["track_id"] in delete}
+        db.delete_rows(T_PLAYLIST_ENTRIES, lambda e: e["track_id"] in delete)
+        touched |= pls
+        db.delete_rows(T_TRACKS, lambda t: t["id"] in delete)
+        for tid in delete:
+            t = tracks[tid]
+            if t.get("path"):
+                files_to_remove.append(os.path.join(root, t["path"].lstrip("/")))
+            ap = t.get("analyze_path") or ""
+            if ap.startswith("/PIONEER/USBANLZ/"):
+                files_to_remove.append(os.path.join(root, os.path.dirname(ap).lstrip("/")))
+            log.append("Slettet: " + (t.get("title") or t.get("path", "")))
+
+    for op in plan.get("add", []):
+        pid = int(op["playlist"])
+        if pid not in playlists:
+            raise PdbError("Playlisten findes ikke på USB'en")
+        for tid in op.get("tracks", []):
+            tid = int(tid)
+            if tid in tracks and tid not in delete:
+                db.add_playlist_entry(pid, tid)
+        touched.add(pid)
+
+    for pid in touched:
+        db.renumber_playlist(pid)
+    for op in plan.get("order", []):
+        db.renumber_playlist(int(op["playlist"]), [int(x) for x in op.get("tracks", [])])
+        touched.add(int(op["playlist"]))
+    db.bump_sequence()
+
+    # Kontrol: kun det vi bad om må være forsvundet – alt andet skal stå uændret
+    check = Pdb(bytes(db.data))
+    for t in (T_TRACKS, T_ARTISTS, T_ALBUMS, T_KEYS, T_PLAYLIST_TREE, T_ARTWORK, T_GENRES):
+        before = [r for r in old.all(t) if not (t == T_TRACKS and r["id"] in delete)]
+        after = check.all(t)
+        if any(b not in after for b in before):
+            raise PdbError("Kontrol fejlede for tabel %d – intet er ændret på USB'en" % t)
+    def key(e):
+        return (e["playlist_id"], e["track_id"])
+    before = {key(e) for e in old.all(T_PLAYLIST_ENTRIES)
+              if e["track_id"] not in delete and key(e) not in removed_pairs}
+    after = {key(e) for e in check.all(T_PLAYLIST_ENTRIES)}
+    if not before <= after:
+        raise PdbError("Kontrol fejlede for playlisterne – intet er ændret på USB'en")
+    if any(t in delete for _pl, t in after):
+        raise PdbError("Kontrol fejlede: en slettet sang står stadig i en playliste – intet er ændret")
+
+    backup = _backup(root)
+    _save_atomic(p, db.data)
+    # Filerne slettes først, når databasen er gemt
+    for f in files_to_remove:
+        try:
+            if os.path.isdir(f):
+                shutil.rmtree(f)
+            elif os.path.exists(f):
+                os.remove(f)
+        except OSError:
+            pass
+    return {"ok": True, "backup": backup, "log": log}
+
+
 def write_usb(root, plan):
     """
     plan = {
@@ -890,9 +1054,7 @@ def write_usb(root, plan):
     db = Pdb(original)
 
     # 1) Backup af hele rekordbox-mappen
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = os.path.join(root, "PIONEER", "MODULR-backup-" + stamp)
-    shutil.copytree(os.path.join(root, "PIONEER", "rekordbox"), backup)
+    backup = _backup(root)
 
     copied = {}            # kilde-sti -> track-id
     existing_by_path = {t["path"]: t["id"] for t in db.all(T_TRACKS)}
@@ -1008,12 +1170,7 @@ def write_usb(root, plan):
             raise PdbError("Kontrol fejlede for tabel %d – intet er ændret på USB'en" % t)
 
     # 3) Skriv atomisk
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".modulr-")
-    with os.fdopen(fd, "wb") as f:
-        f.write(bytes(db.data))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, p)
+    _save_atomic(p, db.data)
     return {"ok": True, "backup": backup, "log": log, "keys": keymap}
 
 
@@ -1027,6 +1184,8 @@ def main():
             res = read_usb(root)
         elif cmd == "write":
             res = write_usb(root, json.load(sys.stdin))
+        elif cmd == "edit":
+            res = edit_usb(root, json.load(sys.stdin))
         else:
             res = {"ok": False, "error": "ukendt kommando"}
     except Exception as e:  # noqa
