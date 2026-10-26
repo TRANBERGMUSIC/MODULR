@@ -344,8 +344,11 @@ struct DetailWaveform: View {
             let fb = firstBeat
             var k = Int(floor((t0 - fb) / beat))
             let pxPerBeat = beat / secsPerPx
+            // Aldrig tættere end ca. 40 px: zoomet ind også slag; ellers hver takt, hver 2./4./8. takt
             let showBeats = pxPerBeat >= 22
-            let showBars = pxPerBeat * 4 >= 12
+            var barStep = 1
+            while Double(barStep) * pxPerBeat * 4 < 40 && barStep < 8 { barStep *= 2 }
+            let showBars = true
             let line = 1 / max(1, Double(scale))
             let red = Color(red: 0.92, green: 0.18, blue: 0.15)
             func triangles(_ x: Double, _ color: Color) {
@@ -369,8 +372,9 @@ struct DetailWaveform: View {
                     let x = (tb - t0) / secsPerPx
                     let inBar = BeatGrid.mod(k, BeatGrid.beatsPerBar)
                     let inPhrase = BeatGrid.mod(k, BeatGrid.beatsPerBar * BeatGrid.barsPerPhrase)
-                    if inBar == 0 && (showBars || inPhrase == 0) {
-                        ctx.fill(Path(CGRect(x: x - line, y: 6, width: line * 2, height: h - 12)), with: .color(Color.white.opacity(0.9)))
+                    let barIndex = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar)))
+                    if inBar == 0 && showBars && (BeatGrid.mod(barIndex, barStep) == 0 || inPhrase == 0) {
+                        ctx.fill(Path(CGRect(x: x - line, y: 6, width: line * 1.5, height: h - 12)), with: .color(Color.white.opacity(0.6)))
                         triangles(x, inPhrase == 0 ? Color.ember : red)
                         if inPhrase == 0 {
                             let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
@@ -600,8 +604,14 @@ struct SectionStrip: View {
                         }
                     }
                     .frame(width: max(1, x1 - x0 - 1))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Som en hot cue: hop til starten af sektionen (og afspil, hvis den står stille)
+                        player.seek(seconds: s.start)
+                        if !player.playing { player.play() }
+                    }
                     .offset(x: x0)
-                    .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar)")
+                    .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar). Klik for at hoppe dertil.")
                 }
             }
         }
