@@ -617,8 +617,9 @@ def _pwv2(cols):
     return _tag(b"PWV2", struct.pack(">II", 100, 0x00010000), bytes(cols))
 
 
-def _pvbr():
-    return _tag(b"PVBR", struct.pack(">I", 0), b"\x00" * 1604)
+def _pvbr(total_samples=0):
+    """Søgetabel: 401 felter. For CBR-MP3 skriver rekordbox nuller og sangens samlede antal samples til sidst."""
+    return _tag(b"PVBR", struct.pack(">I", 0), b"\x00" * 1600 + struct.pack(">I", int(total_samples) & 0xFFFFFFFF))
 
 
 # rekordbox' farvepalette til hot cues (color_code -> RGB), som CDJ'erne kender den.
@@ -873,7 +874,10 @@ def write_anlz(folder, usb_path, analysis):
         if ms not in seen_ms:
             seen_ms.add(ms)
             cues.append((0, ms, None))
-    dat = _anlz_file([_ppth(usb_path), _pvbr(), _pqtz(bpm, first, dur), _pwav(pwav), _pwv2(tiny),
+    samples = 0
+    if usb_path.lower().endswith(".mp3"):
+        samples = int(round(dur * float(analysis.get("sample_rate") or 44100)))
+    dat = _anlz_file([_ppth(usb_path), _pvbr(samples), _pqtz(bpm, first, dur), _pwav(pwav), _pwv2(tiny),
                       _pcob(1, cues), _pcob(0, cues)])
     ext = _anlz_file([_ppth(usb_path), _pwv3(detail), _pcob(1, cues), _pcob(0, cues), _pco2(1, cues), _pco2(0, cues),
                       _pwv5(cdet), _pwv4(cprev)])
@@ -1080,6 +1084,7 @@ def write_usb(root, plan):
             ap = anlz_by_path.get(usb_rel, "")
             folder = os.path.join(root, os.path.dirname(ap).lstrip("/")) if ap else ""
             if is_modulr_anlz(ap, folder) and tr.get("analysis"):
+                tr["analysis"].setdefault("sample_rate", tr.get("sample_rate") or 44100)
                 n = anlz_folder_number(ap)
                 if n and n[0] >= 0x80:
                     # Lagt på af en ældre MODULR i en mappe CDJ'en ikke læser → flyt til rekordbox' område
@@ -1113,8 +1118,9 @@ def write_usb(root, plan):
 
         next_id = max([t["id"] for t in db.all(T_TRACKS)] + [0]) + 1
         anlz_rel = new_anlz_path(root, usb_rel, taken_anlz)
-        write_anlz(os.path.join(root, os.path.dirname(anlz_rel).lstrip("/")), usb_rel, tr.get("analysis") or {
-            "bpm": tr.get("bpm"), "duration": tr.get("duration")})
+        an = dict(tr.get("analysis") or {"bpm": tr.get("bpm"), "duration": tr.get("duration")})
+        an.setdefault("sample_rate", tr.get("sample_rate") or 44100)
+        write_anlz(os.path.join(root, os.path.dirname(anlz_rel).lstrip("/")), usb_rel, an)
         tid = db.add_track({
             "title": tr.get("title") or os.path.splitext(fname)[0], "artist_id": artist_id, "album_id": album_id,
             "genre_id": genre_id, "key_id": key_id, "artwork_id": artwork_id, "bpm": tr.get("bpm") or 0,

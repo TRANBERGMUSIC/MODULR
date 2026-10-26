@@ -1331,6 +1331,12 @@ struct UsbHeader: View {
     @EnvironmentObject var library: LibraryStore
     let drive: UsbDrive
     let title: String
+    @State private var showSettings = false
+
+    init(drive: UsbDrive, title: String) {
+        self.drive = drive
+        self.title = title
+    }
 
     var body: some View {
         let pending = usb.pending[drive.id] ?? []
@@ -1346,7 +1352,26 @@ struct UsbHeader: View {
                         .buttonStyle(.ember)
                         .disabled(usb.writing.contains(drive.id))
                 }
+                Button("My Settings") { showSettings = true }
                 Button("Skub ud") { usb.ejectSafely(drive) }.disabled(usb.writing.contains(drive.id))
+            }
+            if let w = drive.formatWarning {
+                Text("⚠︎ " + w).font(.system(size: 12)).foregroundColor(.amber).fixedSize(horizontal: false, vertical: true)
+            }
+            if let st = usb.settings[drive.id], st.waveformColor == 1 {
+                // Waveform-farven på CDJ'en styres af DEVSETTING.DAT på stikket – BLUE er standard
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.amber)
+                    Text("Denne USB beder CDJ'en om at vise BLÅ waveform. Det er derfor den ikke er i RGB.")
+                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Skift til RGB") { usb.writeSettings(drive, ["DEVSETTING.DAT": ["waveform_color": 3]], done: "Waveform-farven er sat til RGB – sæt USB'en i CDJ'en igen.") }
+                        .buttonStyle(.ember)
+                    Button("3-bånd") { usb.writeSettings(drive, ["DEVSETTING.DAT": ["waveform_color": 4]], done: "Waveform-farven er sat til 3Band – sæt USB'en i CDJ'en igen.") }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.amber.opacity(0.10)))
             }
             if usb.contents[drive.id]?.onelibrary == true {
                 Text("Denne USB har også et OneLibrary (CDJ-3000X, XDJ-AZ, Opus Quad). MODULR skriver i Device Library, som CDJ-3000 læser. Til 3000X: sæt USB'en i rekordbox 7, højreklik på \"OneLibrary\" og vælg \"Convert from Device Library\".")
@@ -1361,6 +1386,104 @@ struct UsbHeader: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+        .sheet(isPresented: $showSettings) {
+            UsbSettingsView(drive: drive) { showSettings = false }
+                .environmentObject(usb)
+        }
+    }
+}
+
+/// My Settings på USB'en – de samme valg som i rekordbox' "My Settings" og på CDJ'en.
+struct UsbSettingsView: View {
+    @EnvironmentObject var usb: UsbStore
+    let drive: UsbDrive
+    let close: () -> Void
+    @State private var draft: [String: [String: Int]] = [:]
+
+    init(drive: UsbDrive, close: @escaping () -> Void) {
+        self.drive = drive
+        self.close = close
+    }
+
+    var body: some View {
+        let st = usb.settings[drive.id]
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Image(systemName: "slider.horizontal.3").foregroundStyle(Color.emberGradient)
+                Text("MY SETTINGS · \(drive.name.uppercased())").font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundColor(.mist)
+                Spacer()
+                Button("Luk") { close() }
+                Button("Gem på USB") {
+                    usb.writeSettings(drive, changes(st))
+                    close()
+                }
+                .buttonStyle(.ember)
+                .disabled(changes(st).isEmpty)
+            }
+            .padding(16)
+            Text("CDJ'en og mixeren henter disse indstillinger fra stikket. De gamle filer gemmes som backup i PIONEER/MODULR-settings-backup.")
+                .font(.system(size: 11)).foregroundColor(.mist.opacity(0.5)).padding(.horizontal, 16).padding(.bottom, 8)
+            if let st {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        ForEach(UsbSettings.fileOrder, id: \.self) { file in
+                            section(file, st)
+                        }
+                    }
+                    .padding(16)
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(width: 560, height: 620)
+        .background(Color.graphite)
+        .onAppear { usb.loadSettings(drive) }
+    }
+
+    func section(_ file: String, _ st: UsbSettings) -> some View {
+        let fields = st.fields.filter { $0.file == file }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text((UsbSettings.fileTitle[file] ?? file).uppercased())
+                .font(.system(size: 11, weight: .bold)).tracking(1.2).foregroundColor(.ember)
+            if st.missing.contains(file) {
+                Text("Filen findes ikke på USB'en – gemmer du, laves den med rekordbox' standardværdier.")
+                    .font(.system(size: 11)).foregroundColor(.mist.opacity(0.5))
+            }
+            if let p = st.problems[file] {
+                Text("⚠︎ \(p)").font(.system(size: 11)).foregroundColor(.amber)
+            }
+            ForEach(fields) { f in
+                HStack {
+                    Text(f.label).font(.system(size: 12)).foregroundColor(.mist.opacity(0.85))
+                    Spacer()
+                    Picker("", selection: binding(f, st)) {
+                        ForEach(f.options) { o in Text(o.label).tag(o.value) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 200)
+                    .disabled(st.problems[file] != nil)
+                }
+            }
+        }
+    }
+
+    func binding(_ f: UsbSettingField, _ st: UsbSettings) -> Binding<Int> {
+        Binding(get: { draft[f.file]?[f.name] ?? st.value(f) ?? f.defaultValue },
+                set: { draft[f.file, default: [:]][f.name] = $0 })
+    }
+
+    /// Kun de felter du faktisk har ændret (og filer der mangler, hvis du har valgt noget i dem).
+    func changes(_ st: UsbSettings?) -> [String: [String: Int]] {
+        guard let st else { return [:] }
+        var out = [String: [String: Int]]()
+        for (file, vals) in draft {
+            for (k, v) in vals {
+                let cur = st.values[file]?[k]
+                if cur != v || st.missing.contains(file) { out[file, default: [:]][k] = v }
+            }
+        }
+        return out
     }
 }
 

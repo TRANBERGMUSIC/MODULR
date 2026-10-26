@@ -9,6 +9,14 @@ struct UsbDrive: Identifiable, Hashable {
     var id: String { url.path }
     let url: URL
     let name: String
+    var format: String = ""
+
+    /// CDJ'er læser kun FAT32 og exFAT (exFAT kun på nyere spillere som CDJ-3000). APFS/Mac OS Extended kan de ikke.
+    var formatWarning: String? {
+        let f = format.lowercased()
+        if f.isEmpty || f.contains("fat") || f.contains("ms-dos") { return nil }
+        return "USB'en er formateret som \(format). CDJ'er kan kun læse FAT32 eller exFAT – formatér den i Diskværktøj (MS-DOS (FAT) eller ExFAT, skema: Master Boot Record)."
+    }
 }
 
 struct UsbTrackInfo: Codable, Identifiable, Hashable {
@@ -99,6 +107,64 @@ struct UsbPending: Identifiable, Equatable {
     var tracks: [UUID]
 }
 
+/// Én indstilling i en af USB'ens My Settings-filer (MYSETTING/MYSETTING2/DJMMYSETTING/DEVSETTING.DAT).
+struct UsbSettingField: Identifiable, Hashable {
+    var id: String { file + "/" + name }
+    let file: String
+    let name: String
+    let label: String
+    let options: [UsbSettingOption]
+    let defaultValue: Int
+}
+
+struct UsbSettingOption: Hashable, Identifiable {
+    var id: Int { value }
+    let value: Int
+    let label: String
+}
+
+struct UsbSettings {
+    var fields: [UsbSettingField] = []
+    var values: [String: [String: Int]] = [:]     // fil → felt → værdi
+    var missing: Set<String> = []
+    var problems: [String: String] = [:]
+
+    static let fileOrder = ["DEVSETTING.DAT", "MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT"]
+    static let fileTitle = ["DEVSETTING.DAT": "Visning (waveform og toneart)", "MYSETTING.DAT": "CDJ – My Settings",
+                            "MYSETTING2.DAT": "CDJ – My Settings 2", "DJMMYSETTING.DAT": "DJM-mixer"]
+
+    func value(_ f: UsbSettingField) -> Int? { values[f.file]?[f.name] }
+
+    /// 1 = BLUE, 3 = RGB, 4 = 3Band (DEVSETTING.DAT)
+    var waveformColor: Int? { values["DEVSETTING.DAT"]?["waveform_color"] }
+
+    static func decode(_ obj: [String: Any]) -> UsbSettings {
+        var out = UsbSettings()
+        let layout = obj["layout"] as? [String: Any] ?? [:]
+        for file in fileOrder {
+            guard let l = layout[file] as? [String: Any], let fs = l["fields"] as? [[Any]] else { continue }
+            for f in fs where f.count >= 5 {
+                let opts = (f[3] as? [[Any]] ?? []).compactMap { o -> UsbSettingOption? in
+                    guard o.count >= 2, let v = (o[0] as? NSNumber)?.intValue else { return nil }
+                    return UsbSettingOption(value: v, label: o[1] as? String ?? "\(v)")
+                }
+                out.fields.append(UsbSettingField(file: file, name: f[0] as? String ?? "", label: f[2] as? String ?? "",
+                                                  options: opts, defaultValue: (f[4] as? NSNumber)?.intValue ?? 0))
+            }
+        }
+        for (file, any) in obj["files"] as? [String: Any] ?? [:] {
+            guard let d = any as? [String: Any] else { continue }
+            if d["missing"] as? Bool == true { out.missing.insert(file); continue }
+            if let e = d["error"] as? String { out.problems[file] = e; continue }
+            if d["crc_ok"] as? Bool == false { out.problems[file] = "tjeksummen passer ikke – filen kan være beskadiget" }
+            var vals = [String: Int]()
+            for (k, v) in d["values"] as? [String: Any] ?? [:] { vals[k] = (v as? NSNumber)?.intValue }
+            out.values[file] = vals
+        }
+        return out
+    }
+}
+
 final class UsbStore: ObservableObject {
     static let shared = UsbStore()
 
@@ -131,7 +197,8 @@ final class UsbStore: ObservableObject {
     private func signature(_ d: UsbDrive) -> String {
         let fm = FileManager.default
         var parts = [String]()
-        for rel in ["PIONEER/rekordbox/export.pdb", "PIONEER/rekordbox/exportExt.pdb", "PIONEER/rekordbox/exportLibrary.db"] {
+        for rel in ["PIONEER/rekordbox/export.pdb", "PIONEER/rekordbox/exportExt.pdb", "PIONEER/rekordbox/exportLibrary.db",
+                    "PIONEER/DEVSETTING.DAT", "PIONEER/MYSETTING.DAT", "PIONEER/MYSETTING2.DAT", "PIONEER/DJMMYSETTING.DAT"] {
             let path = d.url.appendingPathComponent(rel).path
             if let a = try? fm.attributesOfItem(atPath: path) {
                 let m = (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
@@ -162,15 +229,53 @@ final class UsbStore: ObservableObject {
     }
 
     static var script: URL? { Bundle.main.url(forResource: "pioneer_usb", withExtension: "py") }
+    static var settingsScript: URL? { Bundle.main.url(forResource: "pioneer_settings", withExtension: "py") }
+
+    @Published var settings: [String: UsbSettings] = [:]
+
+    func loadSettings(_ d: UsbDrive) {
+        DispatchQueue.global(qos: .utility).async {
+            guard let script = Self.settingsScript,
+                  let data = try? self.run(["read", d.url.path], input: nil, script: script),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], obj["ok"] as? Bool == true else { return }
+            let st = UsbSettings.decode(obj)
+            DispatchQueue.main.async { self.settings[d.id] = st }
+        }
+    }
+
+    /// changes: fil → felt → ny værdi. Gamle filer gemmes i PIONEER/MODULR-settings-backup.
+    func writeSettings(_ d: UsbDrive, _ changes: [String: [String: Int]], done: String = "My Settings er gemt på USB'en – CDJ'en bruger dem, når du loader stikket.") {
+        guard let script = Self.settingsScript else { message = "Indstillings-modulet mangler i appen – geninstallér MODULR"; return }
+        let plan = changes.filter { !$0.value.isEmpty }
+        guard !plan.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var text = done
+            do {
+                let input = try JSONSerialization.data(withJSONObject: plan)
+                let data = try self.run(["write", d.url.path], input: input, script: script)
+                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if obj?["ok"] as? Bool != true {
+                    text = "⛔️ My Settings blev ikke ændret: \(obj?["error"] as? String ?? String(data: data, encoding: .utf8) ?? "ukendt fejl")"
+                }
+            } catch {
+                text = "⛔️ My Settings blev ikke ændret: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self.message = text
+                self.loadSettings(d)
+            }
+        }
+    }
 
     func refresh() {
-        let keys: [URLResourceKey] = [.volumeIsRemovableKey, .volumeNameKey]
+        let keys: [URLResourceKey] = [.volumeIsRemovableKey, .volumeNameKey, .volumeLocalizedFormatDescriptionKey]
         let vols = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [.skipHiddenVolumes]) ?? []
         drives = vols.compactMap { v in
             let pdb = v.appendingPathComponent("PIONEER/rekordbox/export.pdb")
             guard FileManager.default.fileExists(atPath: pdb.path) else { return nil }
-            let name = (try? v.resourceValues(forKeys: [.volumeNameKey]).volumeName) ?? v.lastPathComponent
-            return UsbDrive(url: v, name: name)
+            let rv = try? v.resourceValues(forKeys: [.volumeNameKey, .volumeLocalizedFormatDescriptionKey])
+            let name = rv?.volumeName ?? v.lastPathComponent
+            return UsbDrive(url: v, name: name, format: rv?.volumeLocalizedFormatDescription ?? "")
         }
         for d in drives where contents[d.id] == nil { load(d) }
         let ids = Set(drives.map(\.id))
@@ -178,8 +283,8 @@ final class UsbStore: ObservableObject {
         settling = settling.filter { ids.contains($0.key) }
     }
 
-    private func run(_ args: [String], input: Data?) throws -> Data {
-        guard let script = Self.script else { throw UpdateError.message("USB-modulet mangler i appen – geninstallér MODULR") }
+    private func run(_ args: [String], input: Data?, script given: URL? = nil) throws -> Data {
+        guard let script = given ?? Self.script else { throw UpdateError.message("USB-modulet mangler i appen – geninstallér MODULR") }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         p.arguments = [script.path] + args
@@ -207,6 +312,7 @@ final class UsbStore: ObservableObject {
                 result = UsbContents(ok: false, error: error.localizedDescription, tracks: nil, nodes: nil, onelibrary: nil)
             }
             let sig = self.signature(d)
+            self.loadSettings(d)
             DispatchQueue.main.async {
                 self.contents[d.id] = result
                 self.loading.remove(d.id)

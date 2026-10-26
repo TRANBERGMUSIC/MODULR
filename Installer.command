@@ -45,6 +45,7 @@ if [ ! -f logo.png ] && [ -f logo.b64 ]; then base64 -D -i logo.b64 -o logo.png;
 [ -f logo.png ] && cp logo.png "$OUT/$APP/Contents/Resources/logo.png"
 [ -f hero.jpg ] && cp hero.jpg "$OUT/$APP/Contents/Resources/hero.jpg"
 cp usb/pioneer_usb.py "$OUT/$APP/Contents/Resources/pioneer_usb.py"
+cp usb/pioneer_settings.py "$OUT/$APP/Contents/Resources/pioneer_settings.py"
 
 # fpcalc (Chromaprint) til lyd-fingerprints – officiel udgivelse, tjekket med SHA-256
 FPCALC_VERSION="1.6.2"
