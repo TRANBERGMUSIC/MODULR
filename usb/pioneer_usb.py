@@ -640,11 +640,12 @@ def read_usb(root):
         db = Pdb(f.read())
     artists = {a["id"]: a["name"] for a in db.all(T_ARTISTS)}
     keys = {k["id"]: k["name"] for k in db.all(T_KEYS)}
+    arts = {a["id"]: a["path"] for a in db.all(T_ARTWORK)}
     tracks = []
     for t in db.all(T_TRACKS):
         tracks.append({"id": t["id"], "title": t["title"], "artist": artists.get(t["artist_id"], ""),
                        "bpm": t["bpm"], "key": keys.get(t["key_id"], ""), "duration": t["duration"],
-                       "path": t["path"]})
+                       "path": t["path"], "artwork": arts.get(t.get("artwork_id", 0), "")})
     nodes = db.all(T_PLAYLIST_TREE)
     entries = db.all(T_PLAYLIST_ENTRIES)
     for n in nodes:

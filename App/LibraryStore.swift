@@ -849,7 +849,12 @@ final class WaveformCache {
     func image(for t: LibTrack, width: Int, height: Int, store: LibraryStore) -> CGImage? {
         let key = "\(t.id.uuidString)-\(width)" as NSString
         if let img = cache.object(forKey: key) { return img }
-        let bands = store.bands(t)
+        guard let img = WaveformCache.render(bands: store.bands(t), width: width, height: height) else { return nil }
+        cache.setObject(img, forKey: key)
+        return img
+    }
+
+    static func render(bands: [UInt8], width: Int, height: Int) -> CGImage? {
         guard bands.count >= 3 else { return nil }
         let cols = bands.count / 3
         var px = [UInt8](repeating: 0, count: width * height * 4)
@@ -874,7 +879,6 @@ final class WaveformCache {
                                 space: CGColorSpaceCreateDeviceRGB(),
                                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                                 provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
-        cache.setObject(img, forKey: key)
         return img
     }
 }

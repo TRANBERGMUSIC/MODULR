@@ -65,6 +65,9 @@ final class PlayerModel: ObservableObject {
     @Published var position: Double = 0
     @Published var duration: Double = 0
     @Published private(set) var bands: [UInt8] = []
+    @Published private(set) var externalArt: URL?      // cover for sange uden for biblioteket (fx fra USB)
+    @Published private(set) var analyzingWave = false
+    private var externalOverview: CGImage?
 
     // Niveau (dBFS) – efter EQ, før lytte-volumen
     @Published var levelL: Double = -80
@@ -100,12 +103,15 @@ final class PlayerModel: ObservableObject {
         return LibraryStore.shared.index.track(id) ?? track
     }
 
-    func load(_ t: LibTrack, autoplay: Bool = true) {
+    func load(_ t: LibTrack, autoplay: Bool = true, art: URL? = nil) {
         stopNode()
         stopTimer()
         playing = false
         track = t
+        externalArt = art
+        externalOverview = nil
         bands = LibraryStore.shared.bands(t)
+        if bands.isEmpty { analyzeWave(t) }
         eq = EQSettings()
         clipped = false
         holdDB = -80
@@ -121,6 +127,36 @@ final class PlayerModel: ObservableObject {
         duration = Double(f.length) / sampleRate
         connect(format: f.processingFormat)
         if autoplay { play() }
+    }
+
+    /// Sange uden waveform (fx direkte fra USB): analysér i baggrunden, så de også får waveform.
+    private func analyzeWave(_ t: LibTrack) {
+        analyzingWave = true
+        let url = t.url
+        let id = t.id
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = try? MusicAnalyzer.analyze(url: url)
+            DispatchQueue.main.async {
+                guard let self, self.track?.id == id else { return }
+                self.analyzingWave = false
+                guard let r = result else { return }
+                self.bands = r.bands
+                self.externalOverview = WaveformCache.render(bands: r.bands, width: 1200, height: 60)
+                if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
+                    self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
+                    self.track?.firstBeatMs = r.firstBeatMs
+                }
+            }
+        }
+    }
+
+    /// Overbliks-billedet: fra biblioteket, eller beregnet for en sang udefra.
+    func overviewImage(width: Int, height: Int) -> CGImage? {
+        guard let t = track else { return nil }
+        if LibraryStore.shared.index.track(t.id) != nil {
+            return WaveformCache.shared.image(for: t, width: width, height: height, store: LibraryStore.shared)
+        }
+        return externalOverview
     }
 
     /// Opdaterer waveform-data (efter ny analyse).

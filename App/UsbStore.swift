@@ -19,6 +19,38 @@ struct UsbTrackInfo: Codable, Identifiable, Hashable {
     let key: String
     let duration: Int
     let path: String
+    let artwork: String?
+
+    /// Coverets fil på USB'en (den store udgave, hvis den findes).
+    func artworkURL(root: URL) -> URL? {
+        guard let a = artwork, !a.isEmpty else { return nil }
+        let small = root.appendingPathComponent(String(a.drop(while: { $0 == "/" })))
+        let big = URL(fileURLWithPath: small.path.replacingOccurrences(of: ".jpg", with: "_m.jpg"))
+        if FileManager.default.fileExists(atPath: big.path) { return big }
+        return FileManager.default.fileExists(atPath: small.path) ? small : nil
+    }
+
+    func fileURL(root: URL) -> URL {
+        root.appendingPathComponent(String(path.drop(while: { $0 == "/" })))
+    }
+
+    /// Til afspilleren: sangen fra biblioteket hvis den findes der (samme filnavn), ellers sangen fra USB'en.
+    func playable(root: URL) -> LibTrack {
+        let file = fileURL(root: root)
+        let name = file.deletingPathExtension().lastPathComponent.lowercased()
+        if let lib = LibraryStore.shared.index.tracks.first(where: {
+            $0.url.deletingPathExtension().lastPathComponent.lowercased() == name && FileManager.default.fileExists(atPath: $0.path)
+        }) {
+            return lib
+        }
+        var t = LibTrack(path: file.path)
+        t.title = title
+        t.artist = artist
+        t.bpm = bpm > 0 ? bpm : nil
+        t.key = MusicalKey.parse(key)
+        t.duration = Double(duration)
+        return t
+    }
 }
 
 struct UsbNodeInfo: Codable, Identifiable, Hashable {

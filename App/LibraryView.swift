@@ -68,6 +68,8 @@ struct LibraryView: View {
                     TrackListView()
                 }
             }
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .clipped()
         }
         .environmentObject(ui)
         .environmentObject(player)
@@ -517,11 +519,14 @@ struct Cover: View {
     private let library = LibraryStore.shared
     let track: LibTrack?
     let size: CGFloat
+    var fallbackURL: URL? = nil
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size > 50 ? 10 : 5, style: .continuous).fill(Color.white.opacity(0.06))
             if let t = track, let img = CoverCache.image(t, library: library) {
+                Image(nsImage: img).resizable().interpolation(.high).scaledToFill()
+            } else if let u = fallbackURL, let img = CoverCache.file(u) {
                 Image(nsImage: img).resizable().interpolation(.high).scaledToFill()
             } else {
                 Image(systemName: "music.note").font(.system(size: size * 0.35)).foregroundColor(.mist.opacity(0.25))
@@ -534,6 +539,14 @@ struct Cover: View {
 
 enum CoverCache {
     static let cache = NSCache<NSString, NSImage>()
+
+    /// Billede direkte fra en fil (fx cover på en rekordbox-USB).
+    static func file(_ u: URL) -> NSImage? {
+        if let img = cache.object(forKey: u.path as NSString) { return img }
+        guard let img = NSImage(contentsOf: u) else { return nil }
+        cache.setObject(img, forKey: u.path as NSString)
+        return img
+    }
 
     static func image(_ t: LibTrack, library: LibraryStore) -> NSImage? {
         guard let f = t.artFile, let u = library.artURL(t) else { return nil }
@@ -680,7 +693,7 @@ struct TrackListView: View {
                     TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
                         .width(46)
                     TableColumn("Kvalitet · LUFS", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
-                        .width(min: 130, ideal: 150)
+                        .width(min: 120, ideal: 150)
                 } rows: {
                     ForEach(rows) { t in
                         TableRow(t)
@@ -1193,6 +1206,12 @@ struct UsbPlaylistView: View {
     @EnvironmentObject var library: LibraryStore
     let driveID: String
     let nodeID: Int?
+    @State private var selection: Set<Int> = []
+
+    init(driveID: String, nodeID: Int?) {
+        self.driveID = driveID
+        self.nodeID = nodeID
+    }
 
     var body: some View {
         if let d = usb.drives.first(where: { $0.id == driveID }) {
@@ -1203,8 +1222,10 @@ struct UsbPlaylistView: View {
             let pendingIDs = nodeID.flatMap { id in usb.pending[d.id]?.first { $0.kind == .addTo(id) }?.tracks } ?? []
             VStack(spacing: 0) {
                 UsbHeader(drive: d, title: node?.name ?? d.name)
-                Table(list) {
+                Table(list, selection: $selection) {
                     TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
+                        .width(30)
+                    TableColumn("") { (t: UsbTrackInfo) in UsbCoverCell(track: t, root: d.url) }
                         .width(30)
                     TableColumn("Kunstner") { (t: UsbTrackInfo) in UsbTextCell(text: t.artist, alpha: 0.85) }
                     TableColumn("Titel") { (t: UsbTrackInfo) in UsbTextCell(text: t.title, alpha: 1) }
@@ -1216,6 +1237,20 @@ struct UsbPlaylistView: View {
                         .width(56)
                 }
                 .scrollContentBackground(.hidden)
+                .alternatingRowBackgrounds(.disabled)
+                .contextMenu(forSelectionType: Int.self) { _ in
+                    EmptyView()
+                } primaryAction: { ids in
+                    // Dobbeltklik: afspil fra USB'en (eller biblioteket, hvis sangen også ligger der)
+                    if let id = ids.first, let t = list.first(where: { $0.id == id }) {
+                        PlayerModel.shared.load(t.playable(root: d.url), autoplay: true, art: t.artworkURL(root: d.url))
+                    }
+                }
+                .onChange(of: selection) { _, sel in
+                    guard sel.count == 1, let id = sel.first, !PlayerModel.shared.playing,
+                          let t = list.first(where: { $0.id == id }) else { return }
+                    PlayerModel.shared.load(t.playable(root: d.url), autoplay: false, art: t.artworkURL(root: d.url))
+                }
                 .padding(.horizontal, 12)
                 if !pendingIDs.isEmpty {
                     PendingTracks(ids: pendingIDs)
@@ -1224,6 +1259,23 @@ struct UsbPlaylistView: View {
         } else {
             Text("USB'en er ikke sat i").foregroundColor(.mist.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+struct UsbCoverCell: View {
+    let track: UsbTrackInfo
+    let root: URL
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.06))
+            if let u = track.artworkURL(root: root), let img = CoverCache.file(u) {
+                Image(nsImage: img).resizable().interpolation(.high).scaledToFill()
+            } else {
+                Image(systemName: "music.note").font(.system(size: 10)).foregroundColor(.mist.opacity(0.3))
+            }
+        }
+        .frame(width: 24, height: 24)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 

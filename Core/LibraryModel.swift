@@ -236,10 +236,23 @@ struct LibraryIndex: Codable, Equatable {
 enum WaveColor {
     static let floor = 0.35
 
-    static func rgb(_ lo: Double, _ mi: Double, _ hi: Double) -> (r: Double, g: Double, b: Double)? {
+    /// `floor` 0,35 = pastel (overblik og tabel), ca. 0,08 = mættet som rekordbox' detaljevisning.
+    static func rgb(_ lo: Double, _ mi: Double, _ hi: Double, floor f: Double = WaveColor.floor) -> (r: Double, g: Double, b: Double)? {
         let top = max(lo, max(mi, hi))
         guard top > 0 else { return nil }
-        return (floor + (1 - floor) * lo / top, floor + (1 - floor) * mi / top, floor + (1 - floor) * hi / top)
+        return (f + (1 - f) * lo / top, f + (1 - f) * mi / top, f + (1 - f) * hi / top)
+    }
+
+    /// Værdien (0–255) af et bånd ved en brøkdel af en kolonne, lineært interpoleret – så en zoomet
+    /// waveform bliver blød i stedet for trappet.
+    static func sample(_ bands: [UInt8], at col: Double, band k: Int) -> Double {
+        let cols = bands.count / 3
+        guard cols > 0 else { return 0 }
+        let c = max(0, min(Double(cols - 1), col - 0.5))
+        let i = Int(c)
+        let j = min(cols - 1, i + 1)
+        let f = c - Double(i)
+        return Double(bands[i * 3 + k]) * (1 - f) + Double(bands[j * 3 + k]) * f
     }
 
     /// Kolonne `a..<b` af båndene (3 bytes pr. kolonne): blød top (gennemsnit + maksimum) og farve.
