@@ -30,6 +30,21 @@ struct UsbTrackInfo: Codable, Identifiable, Hashable {
         return FileManager.default.fileExists(atPath: small.path) ? small : nil
     }
 
+    /// Samme id for samme fil hver gang (så afspilleren kan finde sangen i listen igen).
+    static func stableID(_ path: String) -> UUID {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        var h1: UInt64 = 1469598103934665603
+        var h2: UInt64 = 1099511628211
+        for b in path.utf8 {
+            h1 = (h1 ^ UInt64(b)) &* 1099511628211
+            h2 = (h2 &+ UInt64(b)) &* 6364136223846793005
+        }
+        for i in 0..<8 { bytes[i] = UInt8(truncatingIfNeeded: h1 >> (UInt64(i) * 8)) }
+        for i in 0..<8 { bytes[8 + i] = UInt8(truncatingIfNeeded: h2 >> (UInt64(i) * 8)) }
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
     func fileURL(root: URL) -> URL {
         root.appendingPathComponent(String(path.drop(while: { $0 == "/" })))
     }
@@ -44,6 +59,7 @@ struct UsbTrackInfo: Codable, Identifiable, Hashable {
             return lib
         }
         var t = LibTrack(path: file.path)
+        t.id = UsbTrackInfo.stableID(file.path)
         t.title = title
         t.artist = artist
         t.bpm = bpm > 0 ? bpm : nil

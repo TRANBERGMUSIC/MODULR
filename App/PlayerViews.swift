@@ -129,7 +129,7 @@ struct DetailWaveform: View {
             if hasGrid {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(pos.bar).\(pos.beat)")
-                        .font(.system(size: 15, weight: .bold)).monospacedDigit()
+                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
                         .foregroundColor(Color(red: 0.35, green: 0.6, blue: 1))
                     Text("Bars").font(.system(size: 11, weight: .semibold)).foregroundColor(Color(red: 0.35, green: 0.6, blue: 1))
                     Text(pos.barsToPhrase == 8 && pos.beat == 1 ? "· ny frase" : "· frase om \(pos.barsToPhrase)")
@@ -202,13 +202,11 @@ struct DetailWaveform: View {
     func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         let w = Double(size.width), h = Double(size.height)
         let bands = player.bands
-        let rate = MusicAnalyzer.waveformRate
         let secsPerPx = zoom / max(1, w)
         let t0 = player.position - zoom / 2
         let mid = h / 2
-        let gridTop = 10.0, gridBottom = h - 10
 
-        // 1) Beatgrid bag waveformen: grå slag, takter med små trekanter, orange fraser med taktnummer
+        // 1) Beatgrid bag waveformen – diskret: hårfine slag, lidt tydeligere takter, tynd orange frase
         if let bpm = track.bpm, bpm > 0 {
             let beat = 60 / bpm
             let fb = firstBeat
@@ -222,74 +220,35 @@ struct DetailWaveform: View {
                     let inBar = BeatGrid.mod(k, BeatGrid.beatsPerBar)
                     let inPhrase = BeatGrid.mod(k, BeatGrid.beatsPerBar * BeatGrid.barsPerPhrase)
                     if inPhrase == 0 {
-                        ctx.fill(Path(CGRect(x: x - 0.75, y: gridTop, width: 1.5, height: gridBottom - gridTop)),
-                                 with: .color(Color.ember.opacity(0.9)))
+                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(Color.ember.opacity(0.75)))
                         let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
-                        ctx.draw(Text("\(bar)").font(.system(size: 11, weight: .bold)).foregroundColor(Color.ember),
-                                 at: CGPoint(x: x + 4, y: h - 6), anchor: .leading)
-                    } else if inBar == 0 || pxPerBeat > 5 {
-                        let a: Double = inBar == 0 ? 0.42 : 0.18
-                        ctx.fill(Path(CGRect(x: x - 0.5, y: gridTop, width: 1, height: gridBottom - gridTop)),
-                                 with: .color(Color.white.opacity(a)))
-                    }
-                    if inBar == 0 {
-                        // Små trekanter øverst og nederst som i rekordbox (røde på takt 1 i en frase)
-                        let c: Color = inPhrase == 0 ? Color.ember : Color(red: 0.9, green: 0.2, blue: 0.2)
-                        var top = Path()
-                        top.move(to: CGPoint(x: x - 4, y: gridTop - 6))
-                        top.addLine(to: CGPoint(x: x + 4, y: gridTop - 6))
-                        top.addLine(to: CGPoint(x: x, y: gridTop))
-                        top.closeSubpath()
-                        ctx.fill(top, with: .color(c))
-                        var bottom = Path()
-                        bottom.move(to: CGPoint(x: x - 4, y: gridBottom + 6))
-                        bottom.addLine(to: CGPoint(x: x + 4, y: gridBottom + 6))
-                        bottom.addLine(to: CGPoint(x: x, y: gridBottom))
-                        bottom.closeSubpath()
-                        ctx.fill(bottom, with: .color(c))
-                    } else if pxPerBeat > 5 {
-                        ctx.fill(Path(CGRect(x: x - 2, y: gridTop - 3, width: 4, height: 3)), with: .color(Color.white.opacity(0.35)))
-                        ctx.fill(Path(CGRect(x: x - 2, y: gridBottom, width: 4, height: 3)), with: .color(Color.white.opacity(0.35)))
+                        ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember.opacity(0.9)),
+                                 at: CGPoint(x: x + 3, y: h - 7), anchor: .leading)
+                    } else if inBar == 0 {
+                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(Color.white.opacity(0.22)))
+                        ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: 5)), with: .color(Color.white.opacity(0.6)))
+                        ctx.fill(Path(CGRect(x: x - 0.5, y: h - 5, width: 1, height: 5)), with: .color(Color.white.opacity(0.6)))
+                    } else if pxPerBeat > 6 {
+                        ctx.fill(Path(CGRect(x: x - 0.25, y: 0, width: 0.5, height: h)), with: .color(Color.white.opacity(0.1)))
                     }
                 }
                 k += 1
             }
         }
 
-        // 2) Waveformen: én pixel ad gangen, blødt interpoleret mellem analysens kolonner, mættede farver
+        // 2) Waveformen som én blød, kantudglattet form med glidende farver (som rekordbox)
         if bands.count >= 3 {
-            let halfH = (gridBottom - gridTop) / 2 - 2
-            var x = 0.0
-            while x < w {
-                let t = t0 + (x + 0.5) * secsPerPx
-                if t >= 0 && t <= player.duration {
-                    let col = t * rate
-                    var lo: Double, mi: Double, hi: Double
-                    if secsPerPx * rate > 1.5 {
-                        // Zoomet ud: største værdi i pixlens kolonner (så toppe ikke forsvinder)
-                        let a = Int(col - secsPerPx * rate / 2), b = Int(col + secsPerPx * rate / 2) + 1
-                        lo = 0; mi = 0; hi = 0
-                        let cols = bands.count / 3
-                        for c in max(0, a)..<min(cols, max(a + 1, b)) {
-                            lo = max(lo, Double(bands[c * 3]))
-                            mi = max(mi, Double(bands[c * 3 + 1]))
-                            hi = max(hi, Double(bands[c * 3 + 2]))
-                        }
-                    } else {
-                        lo = WaveColor.sample(bands, at: col, band: 0)
-                        mi = WaveColor.sample(bands, at: col, band: 1)
-                        hi = WaveColor.sample(bands, at: col, band: 2)
-                    }
-                    let top = max(lo, max(mi, hi))
-                    if top > 0, let c = WaveColor.rgb(lo, mi, hi, floor: 0.08) {
-                        let bh = top / 255 * halfH
-                        let played: Bool = t <= player.position
-                        let dim: Double = played ? 0.85 : 1
-                        ctx.fill(Path(CGRect(x: x, y: mid - bh, width: 1, height: bh * 2)),
-                                 with: .color(Color(red: c.r * dim, green: c.g * dim, blue: c.b * dim)))
-                    }
+            let halfH = h / 2 - 6
+            let profile = WaveShape.profile(bands, from: t0, secondsPerPoint: secsPerPx, count: Int(w) + 1,
+                                            duration: player.duration, floor: 0.08)
+            let playedX = w / 2
+            if let shape = WaveShape.path(profile, step: 1, mid: mid, halfHeight: halfH) {
+                let gradient = WaveShape.gradient(profile, every: 3, dimBefore: playedX / max(1, w), dim: 0.82)
+                ctx.fill(shape, with: .linearGradient(gradient, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: w, y: 0)))
+                // Lysere kerne giver dybde
+                if let core = WaveShape.path(profile, step: 1, mid: mid, halfHeight: halfH * 0.42) {
+                    ctx.fill(core, with: .color(Color.white.opacity(0.16)))
                 }
-                x += 1
             }
         } else {
             ctx.draw(Text(PlayerModel.shared.analyzingWave ? "Analyserer waveform …" : "Ingen waveform")
@@ -301,11 +260,11 @@ struct DetailWaveform: View {
         for (i, cue) in (track.cues ?? []).enumerated() where cue >= t0 && cue <= t0 + zoom {
             let x = (cue - t0) / secsPerPx
             let amber = Color(red: 1, green: 0.62, blue: 0.2)
-            ctx.fill(Path(CGRect(x: x - 0.75, y: 0, width: 1.5, height: h)), with: .color(amber))
+            ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(amber))
             var tri = Path()
-            tri.move(to: CGPoint(x: x - 6, y: h))
-            tri.addLine(to: CGPoint(x: x + 6, y: h))
-            tri.addLine(to: CGPoint(x: x, y: h - 9))
+            tri.move(to: CGPoint(x: x - 4, y: h))
+            tri.addLine(to: CGPoint(x: x + 4, y: h))
+            tri.addLine(to: CGPoint(x: x, y: h - 6))
             tri.closeSubpath()
             ctx.fill(tri, with: .color(amber))
             let letter = String(UnicodeScalar(UInt8(65 + i % 26)))
@@ -314,7 +273,7 @@ struct DetailWaveform: View {
         }
 
         // 4) Afspilningshoved i midten
-        ctx.fill(Path(CGRect(x: w / 2 - 1, y: 0, width: 2, height: h)), with: .color(.white))
+        ctx.fill(Path(CGRect(x: w / 2 - 0.75, y: 0, width: 1.5, height: h)), with: .color(.white))
     }
 }
 
@@ -334,7 +293,7 @@ struct OverviewWaveform: View {
             let frac: CGFloat = CGFloat(player.position / dur)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.35))
-                if let img = player.overviewImage(width: 1200, height: 60) {
+                if let img = player.overviewImage(width: 2400, height: 80) {
                     Image(decorative: img, scale: 1).resizable().interpolation(.high).opacity(0.45)
                     Image(decorative: img, scale: 1).resizable().interpolation(.high)
                         .mask(alignment: .leading) { Rectangle().frame(width: max(0, w * frac)) }

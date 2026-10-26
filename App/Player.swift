@@ -68,6 +68,17 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var externalArt: URL?      // cover for sange uden for biblioteket (fx fra USB)
     @Published private(set) var analyzingWave = false
     private var externalOverview: CGImage?
+    /// Listen der afspilles fra (sat af den viste tabel) – når en sang slutter, fortsætter den med den næste.
+    var listQueue: [LibTrack] = []
+    var listArt: [UUID: URL] = [:]
+    @Published var advancedTo: UUID?
+
+    /// Den viste liste tilbydes som kø – men en sang der spiller fra en anden liste, beholder sin kø.
+    func offerQueue(_ items: [LibTrack], art: [UUID: URL]) {
+        if playing, let cur = track, !items.contains(where: { $0.id == cur.id }) { return }
+        listQueue = items
+        listArt = art
+    }
 
     // Niveau (dBFS) – efter EQ, før lytte-volumen
     @Published var levelL: Double = -80
@@ -141,7 +152,7 @@ final class PlayerModel: ObservableObject {
                 self.analyzingWave = false
                 guard let r = result else { return }
                 self.bands = r.bands
-                self.externalOverview = WaveformCache.render(bands: r.bands, width: 1200, height: 60)
+                self.externalOverview = WaveformCache.render(bands: r.bands, width: 2400, height: 80)
                 if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
                     self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
                     self.track?.firstBeatMs = r.firstBeatMs
@@ -268,6 +279,11 @@ final class PlayerModel: ObservableObject {
         playing = false
         startFrame = 0
         position = duration
+        // Videre til næste sang i listen
+        guard let cur = track, let i = listQueue.firstIndex(where: { $0.id == cur.id }), i + 1 < listQueue.count else { return }
+        let next = listQueue[i + 1]
+        load(LibraryStore.shared.index.track(next.id) ?? next, autoplay: true, art: listArt[next.id])
+        advancedTo = next.id
     }
 
     private func currentTime() -> Double {

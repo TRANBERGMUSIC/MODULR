@@ -702,6 +702,13 @@ struct TrackListView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .alternatingRowBackgrounds(.disabled)
+                .onChange(of: rows.map(\.id), initial: true) { _, _ in
+                    // Afspilleren fortsætter med næste sang i den viste liste
+                    PlayerModel.shared.offerQueue(rows, art: [:])
+                }
+                .onReceive(PlayerModel.shared.$advancedTo) { id in
+                    if let id { ui.tableSelection = [id] }
+                }
                 .onChange(of: ui.tableSelection) { _, sel in
                     // Én valgt sang vises i afspilleren (uden at afspille), så du kan zoome og rette griddet
                     guard sel.count == 1, let id = sel.first, PlayerModel.shared.track?.id != id,
@@ -722,7 +729,11 @@ struct TrackListView: View {
                 .contextMenu(forSelectionType: UUID.self) { _ in
                     EmptyView()
                 } primaryAction: { ids in
-                    if let id = ids.first, let t = library.index.track(id) { player.load(t) }
+                    if let id = ids.first, let t = library.index.track(id) {
+                        player.listQueue = rows
+                        player.listArt = [:]
+                        player.load(t)
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
@@ -1243,8 +1254,23 @@ struct UsbPlaylistView: View {
                 } primaryAction: { ids in
                     // Dobbeltklik: afspil fra USB'en (eller biblioteket, hvis sangen også ligger der)
                     if let id = ids.first, let t = list.first(where: { $0.id == id }) {
+                        let items: [LibTrack] = list.map { $0.playable(root: d.url) }
+                        var art = [UUID: URL]()
+                        for (i, u) in list.enumerated() { if let a = u.artworkURL(root: d.url) { art[items[i].id] = a } }
+                        PlayerModel.shared.listQueue = items
+                        PlayerModel.shared.listArt = art
                         PlayerModel.shared.load(t.playable(root: d.url), autoplay: true, art: t.artworkURL(root: d.url))
                     }
+                }
+                .onChange(of: list.map(\.id), initial: true) { _, _ in
+                    let items: [LibTrack] = list.map { $0.playable(root: d.url) }
+                    var art = [UUID: URL]()
+                    for (i, t) in list.enumerated() { if let u = t.artworkURL(root: d.url) { art[items[i].id] = u } }
+                    PlayerModel.shared.offerQueue(items, art: art)
+                }
+                .onReceive(PlayerModel.shared.$advancedTo) { id in
+                    guard let id else { return }
+                    if let t = list.first(where: { $0.playable(root: d.url).id == id }) { selection = [t.id] }
                 }
                 .onChange(of: selection) { _, sel in
                     guard sel.count == 1, let id = sel.first, !PlayerModel.shared.playing,

@@ -855,30 +855,6 @@ final class WaveformCache {
     }
 
     static func render(bands: [UInt8], width: Int, height: Int) -> CGImage? {
-        guard bands.count >= 3 else { return nil }
-        let cols = bands.count / 3
-        var px = [UInt8](repeating: 0, count: width * height * 4)
-        for x in 0..<width {
-            let a = x * cols / width
-            let b = max(a + 1, (x + 1) * cols / width)
-            guard let col = WaveColor.column(bands, a, b) else { continue }
-            let h: Int = Int((col.height * Double(height)).rounded())
-            guard h > 0 else { continue }
-            for yy in 0..<min(h, height) {
-                let shade: Double = 0.74 + 0.26 * Double(yy) / Double(max(1, h))
-                let row = height - 1 - yy
-                let i = (row * width + x) * 4
-                px[i] = UInt8(min(255, col.r * shade * 255))
-                px[i + 1] = UInt8(min(255, col.g * shade * 255))
-                px[i + 2] = UInt8(min(255, col.b * shade * 255))
-                px[i + 3] = 255
-            }
-        }
-        guard let provider = CGDataProvider(data: Data(px) as CFData),
-              let img = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
-        return img
+        WaveShape.image(bands: bands, width: width, height: height)
     }
 }
