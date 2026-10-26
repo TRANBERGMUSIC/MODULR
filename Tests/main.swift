@@ -522,6 +522,85 @@ do {
     check("ID3-test kørte", false, error.localizedDescription)
 }
 
+// MARK: - Lydstyrke (Platinum Notes-delen)
+print("\nLydstyrke")
+do {
+    func sines(_ sr: Double, seconds: Double = 10) -> [[Float]] {
+        let n = Int(sr * seconds)
+        var l = [Float](repeating: 0, count: n), r = l
+        for i in 0..<n {
+            let t = Double(i) / sr
+            l[i] = Float(0.5 * sin(2 * .pi * 1000 * t))
+            r[i] = Float(0.25 * sin(2 * .pi * 200 * t))
+        }
+        return [l, r]
+    }
+    // Referenceværdier fra pyloudnorm (ITU-R BS.1770-4)
+    let l48 = Loudness.integratedLUFS(sines(48000), sr: 48000)
+    check("LUFS 48 kHz ≈ −8,27 (pyloudnorm)", abs(l48 - -8.273) < 0.1, String(format: "%.2f", l48))
+    let l44 = Loudness.integratedLUFS(sines(44100), sr: 44100)
+    check("LUFS 44,1 kHz ≈ −8,27 (pyloudnorm)", abs(l44 - -8.273) < 0.1, String(format: "%.2f", l44))
+    let quiet = Loudness.integratedLUFS([[Float](repeating: 0, count: 48000 * 2)], sr: 48000)
+    check("Stilhed giver −70", quiet <= -70)
+
+    // Kick-agtigt signal: limiteren skal holde toppen under −1 dBFS
+    let sr = 44100.0
+    let n = Int(sr * 12)
+    var mix = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+        let t = Double(i) / sr
+        let b = t.truncatingRemainder(dividingBy: 0.5)
+        let kick = sin(2 * .pi * (50 + 150 * exp(-b * 30)) * b) * exp(-b * 8)
+        let pad = 0.1 * sin(2 * .pi * 440 * t)
+        mix[i] = Float((kick + pad) * 0.25)
+    }
+    let ch = [mix, mix]
+    let (limited, gr) = Loudness.applyGainAndLimit(ch, sr: sr, gainDB: 12)
+    check("Limiter: top ≤ −1 dBFS", Loudness.peakDB(limited) <= -0.99, String(format: "%.2f", Loudness.peakDB(limited)))
+    check("Limiter: dæmper", gr < -1)
+    let (fixed, res) = Loudness.normalizePCM(ch, sr: sr, target: -9, maxLimitingDB: 5)
+    check("Normalisering: rammer målet eller stopper ved 5 dB limiting",
+          abs(res.after - -9) < 0.3 || res.limitingDB <= 5.05, res.note)
+    check("Normalisering: aldrig mere end 5 dB limiting", res.limitingDB <= 5.05, String(format: "%.2f", res.limitingDB))
+    check("Normalisering: top ≤ −1 dBFS", Loudness.peakDB(fixed) <= -0.99)
+    // For høj sang skrues ned uden limiting
+    let loud = ch.map { $0.map { $0 * 3.5 } }
+    let (_, down) = Loudness.normalizePCM(loud, sr: sr, target: -14, maxLimitingDB: 5)
+    check("For høj sang skrues ned til målet", abs(down.after - -14) < 0.3, down.note)
+
+    // 24-bit WAV kan læses igen
+    let wav = tmp.appendingPathComponent("loud.wav")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    try Loudness.writePCM(fixed, sr: sr, to: wav)
+    let back = try Loudness.read(url: wav)
+    check("WAV 24-bit: samme længde og samplerate", back.channels.first?.count == n && back.sampleRate == sr)
+    let diff = abs(Loudness.integratedLUFS(back.channels, sr: sr) - res.after)
+    check("WAV 24-bit: samme lydstyrke efter skrivning", diff < 0.05, String(format: "%.3f", diff))
+
+    // MP3: trin beregnes, men aldrig så toppen klipper
+    check("MP3-trin: −14 → −9 med plads = +3 trin", Loudness.mp3Steps(lufs: -14, peakDB: -6, target: -9) == 3)
+    check("MP3-trin: begrænses af toppen", Loudness.mp3Steps(lufs: -14, peakDB: -1, target: -9) == 0)
+    check("MP3-trin: for høj → ned", Loudness.mp3Steps(lufs: -6, peakDB: -0.1, target: -9) == -2)
+
+    // Fiks tracks-listen
+    var t = LibTrack(path: "/tmp/x.wav")
+    t.analyzed = true
+    t.tierKbps = 9999
+    t.lufs = -14
+    check("Fiks tracks: for lav lydstyrke", t.needsLoudnessFix(target: -9))
+    t.loudnessFixedAt = -9
+    check("Fiks tracks: rettet sang er ude", !t.needsLoudnessFix(target: -9))
+    t.loudnessFixedAt = nil
+    t.loudnessSkip = true
+    check("Fiks tracks: gendannet original røres ikke", !t.needsLoudnessFix(target: -9))
+    var f = LibTrack(path: "/tmp/x.flac")
+    f.lufs = -14
+    check("Fiks tracks: FLAC rettes ikke automatisk", !f.needsLoudnessFix(target: -9))
+    check("Smartliste hedder Fiks tracks", SmartList.upgrade.rawValue == "Fiks tracks")
+} catch {
+    check("Lydstyrke-test kørte", false, error.localizedDescription)
+}
+
 try? FileManager.default.removeItem(at: tmp)
 print("\n\(passed) bestået, \(failed) fejlet")
 exit(failed == 0 ? 0 : 1)

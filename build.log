@@ -1,25 +1,14 @@
 == MODULR installation ==
 Bygger appen (tager ca. et minut)...
-App/LibraryStore.swift:309:44: warning: capture of 'self' with non-Sendable type 'LibraryStore' in a '@Sendable' closure [#SendableClosureCaptures]
-  9 | import UniformTypeIdentifiers
- 10 | 
- 11 | final class LibraryStore: ObservableObject {
-    |             `- note: class 'LibraryStore' does not conform to the 'Sendable' protocol
- 12 |     static let shared = LibraryStore()
- 13 | 
-    :
-307 |         guard let t = snapshot().track(id) else { throw ReplaceError.message("Sangen findes ikke") }
-308 |         await MainActor.run { _ = self.working.insert(id) }
-309 |         defer { DispatchQueue.main.async { self.working.remove(id) } }
-    |                                            `- warning: capture of 'self' with non-Sendable type 'LibraryStore' in a '@Sendable' closure [#SendableClosureCaptures]
-310 |         let fm = FileManager.default
-311 |         let old = t.url
+App/Shell.swift:59:10: warning: 'onChange(of:perform:)' was deprecated in macOS 14.0: Use `onChange` with a two or zero parameter action closure instead. [#DeprecatedDeclaration]
+ 57 |         .background(Color.void)
+ 58 |         .ignoresSafeArea(.container, edges: .top)
+ 59 |         .onChange(of: model.findBetterRequest) { url in
+    |          `- warning: 'onChange(of:perform:)' was deprecated in macOS 14.0: Use `onChange` with a two or zero parameter action closure instead. [#DeprecatedDeclaration]
+ 60 |             if let url {
+ 61 |                 findBetter.start(file: url)
 
-[#SendableClosureCaptures]: <https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures>
-App/LibraryView.swift:761:78: error: the compiler is unable to type-check this expression in reasonable time; try breaking up the expression into distinct sub-expressions
- 759 |                     TableColumn("Energi", value: \.sortEnergy) { t in EnergyBar(value: t.energy) }.width(70)
- 760 |                     Group {
- 761 |                         TableColumn("Længde", value: \.sortDuration) { t in Text(t.durationText).monospacedDigit().foregroundColor(.mist.opacity(0.7)) }.width(56)
-     |                                                                             `- error: the compiler is unable to type-check this expression in reasonable time; try breaking up the expression into distinct sub-expressions
- 762 |                         TableColumn("Kvalitet", value: \.sortQuality) { t in QualityText(track: t) }.width(min: 80, ideal: 104)
- 763 |                         TableColumn("Format") { t in Text(t.codec).font(.system(size: 11)).foregroundColor(.mist.opacity(0.5)) }.width(50)
+[#DeprecatedDeclaration]: <https://docs.swift.org/compiler/documentation/diagnostics/deprecated-declaration>
+
+Færdig! MODULR ligger nu i /Applications og åbner om et øjeblik.
+Fremover opdaterer appen sig selv.

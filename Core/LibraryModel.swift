@@ -28,10 +28,19 @@ struct LibTrack: Codable, Identifiable, Equatable {
     // Filer i MODULR
     var artFile: String?          // cover (JPEG)
     var hasWave: Bool
+    var waveVersion: Int?
+    static let currentWaveVersion = 2
     var addedAt: Date
     var analyzed: Bool
     var analysisError: String?
     var history: [String]         // tidligere filer (efter udskiftning)
+    // Lydstyrke (som Platinum Notes)
+    var lufs: Double?             // integreret lydstyrke (EBU R128)
+    var peakDB: Double?
+    var loudnessFixedAt: Double?  // det mål filen er rettet til
+    var loudnessNote: String?
+    var originalBackup: String?   // originalen før lydstyrken blev rettet
+    var loudnessSkip: Bool?       // du har gendannet originalen – rør den ikke igen
 
     var url: URL { URL(fileURLWithPath: path) }
     var fileName: String { url.lastPathComponent }
@@ -51,6 +60,32 @@ struct LibTrack: Codable, Identifiable, Equatable {
     }
 
     var needsUpgrade: Bool { (tierKbps ?? 9999) < 320 }
+
+    static let gainFixableExts: Set<String> = ["mp3", "wav", "aif", "aiff"]
+    var canFixLoudness: Bool { Self.gainFixableExts.contains(ext) }
+
+    /// Skal lydstyrken rettes til målet? (mere end 1 dB ved siden af og ikke allerede rettet)
+    func needsLoudnessFix(target: Double) -> Bool {
+        guard let l = lufs, canFixLoudness, loudnessSkip != true else { return false }
+        if let done = loudnessFixedAt, abs(done - target) < 0.05 { return false }
+        return abs(l - target) > 1.0
+    }
+
+    var needsFix: Bool { needsUpgrade || needsLoudnessFix(target: LoudnessPrefs.target) }
+
+    mutating func resetLoudness() {
+        lufs = nil
+        peakDB = nil
+        loudnessFixedAt = nil
+        loudnessNote = nil
+        originalBackup = nil
+        loudnessSkip = nil
+    }
+
+    var lufsText: String {
+        guard let l = lufs else { return "" }
+        return String(format: "%.1f LUFS", l)
+    }
 
     var durationText: String {
         guard let d = duration, d > 0 else { return "–" }
@@ -104,7 +139,7 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
     case all = "Alle sange"
     case queue = "Til analyse"
     case recent = "Senest tilføjet"
-    case upgrade = "Skal opgraderes"
+    case upgrade = "Fiks tracks"
 
     var id: String { rawValue }
 
@@ -113,7 +148,7 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
         case .all: return "infinity"
         case .queue: return "clock.arrow.circlepath"
         case .recent: return "sparkles"
-        case .upgrade: return "arrow.up.circle"
+        case .upgrade: return "wrench.and.screwdriver"
         }
     }
 
@@ -122,9 +157,20 @@ enum SmartList: String, CaseIterable, Codable, Identifiable {
         case .all: return true
         case .queue: return !t.analyzed
         case .recent: return Date().timeIntervalSince(t.addedAt) < 14 * 24 * 3600
-        case .upgrade: return t.analyzed && t.needsUpgrade
+        case .upgrade: return t.analyzed && t.needsFix
         }
     }
+}
+
+/// Indstillinger for automatisk lydstyrke (gemt i UserDefaults).
+enum LoudnessPrefs {
+    static let targetKey = "loud.target"
+    static let autoKey = "loud.auto"
+    static var target: Double {
+        let v = UserDefaults.standard.object(forKey: targetKey) as? Double ?? -9
+        return min(-6, max(-14, v))
+    }
+    static var autoFix: Bool { UserDefaults.standard.object(forKey: autoKey) as? Bool ?? true }
 }
 
 struct LibraryIndex: Codable, Equatable {

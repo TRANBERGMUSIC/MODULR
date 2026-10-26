@@ -351,16 +351,22 @@ enum MusicAnalyzer {
             sumHigh += Double(hi)
             sumAll += Double(lo + mi + hi)
         }
-        // Normalisér hvert bånd mod sin 99,5-percentil, så musik i alle styrker fylder højden
+        // Båndene vejes mod hinanden (diskant har naturligt mindre energi) og normaliseres samlet,
+        // så forholdet mellem bas/mellem/diskant bevares – det giver rekordbox' RGB-farver.
+        let weights: [Float] = [1.0, 1.8, 3.2]
+        var tops = [Float](repeating: 0, count: cols)
+        for c in 0..<cols {
+            for band in 0..<3 { raw[c * 3 + band] *= weights[band] }
+            tops[c] = max(raw[c * 3], max(raw[c * 3 + 1], raw[c * 3 + 2]))
+        }
+        var sortedTops = tops
+        sortedTops.sort()
+        let refIndex: Int = min(sortedTops.count - 1, Int(Double(sortedTops.count) * 0.995))
+        let ref: Float = max(1e-6, sortedTops[refIndex])
         var out = [UInt8](repeating: 0, count: cols * 3)
-        for band in 0..<3 {
-            var vals = stride(from: band, to: raw.count, by: 3).map { raw[$0] }
-            vals.sort()
-            let ref = max(1e-6, vals[min(vals.count - 1, Int(Double(vals.count) * 0.995))])
-            for c in 0..<cols {
-                let v = min(1, raw[c * 3 + band] / ref)
-                out[c * 3 + band] = UInt8(min(255, (powf(v, 0.8) * 255).rounded()))
-            }
+        for i in 0..<(cols * 3) {
+            let v: Float = min(1, raw[i] / ref)
+            out[i] = UInt8((v * 255).rounded())
         }
         return (out, BandStats(brightness: sumAll > 0 ? sumHigh / sumAll : 0))
     }

@@ -130,6 +130,75 @@ struct LibraryView: View {
     }
 }
 
+// MARK: - Navnedialog
+
+struct NamePrompt: Identifiable {
+    let id = UUID()
+    var title: String
+    var text: String
+    var icon: String = "music.note.list"
+    var button: String = "Opret"
+    var action: (String) -> Void
+}
+
+/// Dialog til nye playlister/mapper i MODULRs eget look.
+struct NameSheet: View {
+    let prompt: NamePrompt
+    let close: () -> Void
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    var trimmed: String { text.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.ember.opacity(0.15))
+                    Image(systemName: prompt.icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.emberGradient)
+                }
+                .frame(width: 38, height: 38)
+                Text(prompt.title).font(.system(size: 17, weight: .semibold)).foregroundColor(Color.mist)
+            }
+            TextField("Navn", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .foregroundColor(Color.mist)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(focused ? Color.ember : Color.hairline, lineWidth: focused ? 1.5 : 1))
+                .focused($focused)
+                .onSubmit(submit)
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Annullér", action: close)
+                    .buttonStyle(.ghost)
+                    .keyboardShortcut(.cancelAction)
+                Button(prompt.button, action: submit)
+                    .buttonStyle(.ember)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 380)
+        .background(Color.graphite)
+        .preferredColorScheme(.dark)
+        .onAppear {
+            text = prompt.text
+            focused = true
+        }
+    }
+
+    func submit() {
+        guard !trimmed.isEmpty else { return }
+        prompt.action(trimmed)
+        close()
+    }
+}
+
 // MARK: - Sidebar
 
 struct LibrarySidebar: View {
@@ -137,13 +206,6 @@ struct LibrarySidebar: View {
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var ui: LibraryUIState
     @State private var naming: NamePrompt?
-
-    struct NamePrompt: Identifiable {
-        let id = UUID()
-        var title: String
-        var text: String
-        var action: (String) -> Void
-    }
 
     var body: some View {
         ScrollView {
@@ -230,18 +292,15 @@ struct LibrarySidebar: View {
             .padding(.top, 14)
         }
         .background(Color.graphite.opacity(0.6))
-        .alert(naming?.title ?? "", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
-            TextField("Navn", text: Binding(get: { naming?.text ?? "" }, set: { naming?.text = $0 }))
-            Button("Opret") {
-                if let n = naming, !n.text.trimmingCharacters(in: .whitespaces).isEmpty { n.action(n.text.trimmingCharacters(in: .whitespaces)) }
-                naming = nil
-            }
-            Button("Annullér", role: .cancel) { naming = nil }
+        .sheet(item: $naming) { p in
+            NameSheet(prompt: p) { naming = nil }
         }
     }
 
     func prompt(_ title: String, _ text: String, _ action: @escaping (String) -> Void) {
-        naming = NamePrompt(title: title, text: text, action: action)
+        let icon: String = title.lowercased().contains("mappe") ? "folder.fill" : (title == "Omdøb" ? "pencil" : "music.note.list")
+        let button: String = title == "Omdøb" ? "Gem" : "Opret"
+        naming = NamePrompt(title: title, text: text, icon: icon, button: button, action: action)
     }
 
     func sectionHeader(_ s: String) -> some View {
@@ -548,7 +607,7 @@ struct PlayerPanel: View {
 
 struct BigWaveform: View {
     @EnvironmentObject var player: PlayerModel
-    @EnvironmentObject var library: LibraryStore
+    @ObservedObject private var library = LibraryStore.shared
     let track: LibTrack
 
     var body: some View {
@@ -584,7 +643,7 @@ struct BigWaveform: View {
 }
 
 struct Cover: View {
-    @EnvironmentObject var library: LibraryStore
+    private let library = LibraryStore.shared
     let track: LibTrack?
     let size: CGFloat
 
@@ -661,8 +720,7 @@ struct TrackListView: View {
     @State private var sortOrder: [KeyPathComparator<LibTrack>] = TrackListView.defaultSort
     @State private var targeted = false
     @State private var confirmForce: (UUID, URL, String)?
-    @State private var newUsbPlaylist: (UsbDrive, [UUID])?
-    @State private var newUsbName = ""
+    @State private var naming: NamePrompt?
 
     var title: String {
         switch ui.selection {
@@ -706,7 +764,20 @@ struct TrackListView: View {
                     ProgressView().controlSize(.small)
                     Text("Analyserer \(library.analyzing.count) …").font(.system(size: 11)).foregroundColor(.mist.opacity(0.5))
                 }
+                if !library.fixing.isEmpty {
+                    ProgressView().controlSize(.small)
+                    Text("Retter lydstyrke på \(library.fixing.count) …").font(.system(size: 11)).foregroundColor(Color.ember.opacity(0.85))
+                }
                 Spacer()
+                if case .smart(.upgrade) = ui.selection {
+                    Button {
+                        library.fixAllLoudness()
+                    } label: {
+                        Label("Ret lydstyrke nu", systemImage: "dial.medium")
+                    }
+                    .buttonStyle(.ember)
+                    .help("Alle sange rettes til \(Int(LoudnessPrefs.target)) LUFS – originalerne gemmes i Musik/MODULR/Originaler")
+                }
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundColor(.mist.opacity(0.4))
                     TextField("Søg", text: $ui.search).textFieldStyle(.plain).frame(width: 180)
@@ -750,8 +821,8 @@ struct TrackListView: View {
                         .width(70)
                     TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
                         .width(56)
-                    TableColumn("Kvalitet", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
-                        .width(min: 96, ideal: 130)
+                    TableColumn("Kvalitet · LUFS", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
+                        .width(min: 130, ideal: 170)
                 } rows: {
                     ForEach(rows) { t in
                         TableRow(t)
@@ -779,16 +850,8 @@ struct TrackListView: View {
             }
             Button("Annullér", role: .cancel) { confirmForce = nil }
         } message: { Text(confirmForce?.2 ?? "") }
-        .alert("Ny playliste på USB", isPresented: Binding(get: { newUsbPlaylist != nil }, set: { if !$0 { newUsbPlaylist = nil } })) {
-            TextField("Navn", text: $newUsbName)
-            Button("Opret") {
-                if let v = newUsbPlaylist, !newUsbName.isEmpty {
-                    let key = usb.newPlaylist(v.0, name: newUsbName, parent: .root, tracks: v.1)
-                    ui.selection = .usbPending(v.0.id, key)
-                }
-                newUsbPlaylist = nil
-            }
-            Button("Annullér", role: .cancel) { newUsbPlaylist = nil }
+        .sheet(item: $naming) { p in
+            NameSheet(prompt: p) { naming = nil }
         }
     }
 
@@ -813,7 +876,12 @@ struct TrackListView: View {
                 Menu("Send til USB") {
                     ForEach(usb.drives) { d in
                         Menu(d.name) {
-                            Button("Ny playliste…") { newUsbName = title; newUsbPlaylist = (d, list) }
+                            Button("Ny playliste…") {
+                                naming = NamePrompt(title: "Ny playliste på \(d.name)", text: title, icon: "externaldrive.fill") { name in
+                                    let key = usb.newPlaylist(d, name: name, parent: .root, tracks: list)
+                                    ui.selection = .usbPending(d.id, key)
+                                }
+                            }
                             Divider()
                             ForEach((usb.contents[d.id]?.nodes ?? []).filter { !$0.folder }) { n in
                                 Button(n.name) { usb.add(list, to: d, existing: n.id); ui.selection = .usb(d.id, n.id) }
@@ -831,6 +899,10 @@ struct TrackListView: View {
                 }
             }
             Button("Analysér igen") { library.reanalyze(list) }
+            Button("Ret lydstyrke til \(Int(LoudnessPrefs.target)) LUFS") { library.fixLoudness(list, force: true) }
+            if list.contains(where: { library.index.track($0)?.originalBackup != nil }) {
+                Button("Gendan original (før lydstyrke)") { library.restoreOriginal(list) }
+            }
             Button("Vis i Finder") { NSWorkspace.shared.activateFileViewerSelecting(list.compactMap { library.index.track($0)?.url }) }
             Divider()
             Button("Fjern fra biblioteket", role: .destructive) { library.remove(list) }
@@ -883,7 +955,7 @@ struct ArtistCell: View {
 }
 
 struct TitleCell: View {
-    @EnvironmentObject var library: LibraryStore
+    @ObservedObject private var library = LibraryStore.shared
     let track: LibTrack
     var body: some View {
         HStack(spacing: 5) {
@@ -932,19 +1004,59 @@ struct QualityCell: View {
         HStack(spacing: 6) {
             QualityText(track: track)
             Text(track.codec).font(.system(size: 10)).foregroundColor(Color.mist.opacity(0.4))
+            LufsBadge(track: track)
         }
     }
 }
 
-struct MiniWave: View {
-    @EnvironmentObject var library: LibraryStore
+/// Lydstyrken: grøn = klar til klubben, orange = rettes, hvirvel = rettes nu.
+struct LufsBadge: View {
+    @ObservedObject private var library = LibraryStore.shared
     let track: LibTrack
 
     var body: some View {
-        if track.hasWave, let img = WaveformCache.shared.image(for: track, width: 120, height: 30, store: library) {
-            Image(decorative: img, scale: 1).resizable().interpolation(.medium)
-        } else {
-            RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.04))
+        if library.fixing.contains(track.id) {
+            HStack(spacing: 3) {
+                ProgressView().controlSize(.mini)
+                Text("Retter").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember)
+            }
+        } else if let l = track.lufs {
+            let target: Double = LoudnessPrefs.target
+            let ok: Bool = abs(l - target) <= 1.0 || track.loudnessFixedAt != nil
+            let color: Color = ok ? Color(red: 0.35, green: 0.9, blue: 0.5) : Color(red: 1, green: 0.62, blue: 0.25)
+            let fixed: Bool = track.loudnessFixedAt != nil
+            HStack(spacing: 2) {
+                if fixed { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
+                Text(String(format: "%.0f", l))
+            }
+            .font(.system(size: 10, weight: .bold)).monospacedDigit()
+            .foregroundColor(color)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(color.opacity(0.14)))
+            .help(LufsBadge.helpText(track, target: target))
+        }
+    }
+
+    static func helpText(_ t: LibTrack, target: Double) -> String {
+        var parts = [t.lufsText]
+        if let p = t.peakDB { parts.append(String(format: "top %.1f dBFS", p)) }
+        parts.append(String(format: "mål %.0f LUFS", target))
+        if let n = t.loudnessNote { parts.append(n) }
+        if !t.canFixLoudness { parts.append("\(t.codec) rettes ikke automatisk – kun WAV, AIFF og MP3") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+struct MiniWave: View {
+    private let library = LibraryStore.shared
+    let track: LibTrack
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 3).fill(Color.black.opacity(0.35))
+            if track.hasWave, let img = WaveformCache.shared.image(for: track, width: 192, height: 52, store: library) {
+                Image(decorative: img, scale: 2).resizable().interpolation(.high)
+            }
         }
     }
 }
@@ -1227,7 +1339,7 @@ struct UsbPendingView: View {
 }
 
 struct PendingTracks: View {
-    @EnvironmentObject var library: LibraryStore
+    @ObservedObject private var library = LibraryStore.shared
     let ids: [UUID]
 
     var body: some View {

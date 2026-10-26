@@ -56,7 +56,40 @@ struct SettingsView: View {
             }
             .padding(20)
             .tabItem { Label("Regler", systemImage: "checklist") }
+
+            LoudnessSettingsView()
+                .padding(20)
+                .tabItem { Label("Lydstyrke", systemImage: "dial.medium") }
         }
         .frame(width: 620, height: 440)
+    }
+}
+
+/// Lydstyrke som Platinum Notes: alle sange rettes til samme niveau, så gain-knappen kan blive i midten.
+struct LoudnessSettingsView: View {
+    @AppStorage(LoudnessPrefs.autoKey) private var autoFix = true
+    @AppStorage(LoudnessPrefs.targetKey) private var target = -9.0
+
+    var body: some View {
+        Form {
+            Section("Klubniveau") {
+                Toggle("Ret lydstyrken automatisk på nye sange", isOn: $autoFix)
+                Slider(value: $target, in: -12 ... -6, step: 0.5) {
+                    Text("Mål: \(String(format: "%.1f", target)) LUFS")
+                }
+                Text("−9 LUFS passer til store klubanlæg og moderne klubmusik – så står gain-knappen samme sted på hver sang. Højere end −8 begynder at maste lyden.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Sådan rettes filerne") {
+                Text("WAV/AIFF: gain + en gennemsigtig limiter (top −1 dBFS, højst 5 dB dæmpning), gemt som 24-bit.")
+                Text("MP3: tabsfri gain i trin på 1,5 dB – ingen genkodning, så kvaliteten forringes ikke.")
+                Text("FLAC/M4A: måles, men rettes ikke.")
+                Text("Originalerne gemmes i Musik/MODULR/Originaler – højreklik → \"Gendan original\".")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            Button("Ret alle sange nu") { LibraryStore.shared.fixAllLoudness() }
+        }
     }
 }
