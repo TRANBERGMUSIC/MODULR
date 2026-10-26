@@ -205,7 +205,6 @@ struct LibrarySidebar: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var ui: LibraryUIState
-    @State private var naming: NamePrompt?
 
     var body: some View {
         ScrollView {
@@ -249,15 +248,14 @@ struct LibrarySidebar: View {
                 HStack {
                     sectionHeader("PLAYLISTER")
                     Spacer()
-                    Menu {
-                        Button("Ny playliste") { prompt("Ny playliste", "Ny playliste") { _ = library.createNode(name: $0, parent: nil, folder: false) } }
-                        Button("Ny mappe") { prompt("Ny mappe", "Ny mappe") { _ = library.createNode(name: $0, parent: nil, folder: true) } }
-                    } label: {
-                        Image(systemName: "plus.circle.fill").foregroundStyle(Color.emberGradient)
+                    ModMenuButton(items: {
+                        [
+                            .action("Ny playliste", icon: "music.note.list") { prompt("Ny playliste", "Ny playliste") { _ = library.createNode(name: $0, parent: nil, folder: false) } },
+                            .action("Ny mappe", icon: "folder.fill.badge.plus") { prompt("Ny mappe", "Ny mappe") { _ = library.createNode(name: $0, parent: nil, folder: true) } },
+                        ]
+                    }) {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 14)).foregroundStyle(Color.emberGradient)
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
                     .padding(.trailing, 14)
                 }
                 VStack(spacing: 2) {
@@ -292,15 +290,12 @@ struct LibrarySidebar: View {
             .padding(.top, 14)
         }
         .background(Color.graphite.opacity(0.6))
-        .sheet(item: $naming) { p in
-            NameSheet(prompt: p) { naming = nil }
-        }
     }
 
     func prompt(_ title: String, _ text: String, _ action: @escaping (String) -> Void) {
         let icon: String = title.lowercased().contains("mappe") ? "folder.fill" : (title == "Omdøb" ? "pencil" : "music.note.list")
         let button: String = title == "Omdøb" ? "Gem" : "Opret"
-        naming = NamePrompt(title: title, text: text, icon: icon, button: button, action: action)
+        Dialogs.shared.name(NamePrompt(title: title, text: text, icon: icon, button: button, action: action))
     }
 
     func sectionHeader(_ s: String) -> some View {
@@ -419,24 +414,37 @@ struct NodeRow: View {
                 }
                 return true
             } isTargeted: { targeted = $0 }
-            .contextMenu {
-                if node.isFolder {
-                    Button("Ny playliste i mappen") { prompt("Ny playliste", "Ny playliste") { _ = library.createNode(name: $0, parent: node.id, folder: false) } }
-                    Button("Ny mappe i mappen") { prompt("Ny mappe", "Ny mappe") { _ = library.createNode(name: $0, parent: node.id, folder: true) } }
-                    Divider()
-                }
-                Button("Omdøb…") { prompt("Omdøb", node.name) { library.rename(node.id, to: $0) } }
-                if node.parent != nil { Button("Flyt ud på øverste niveau") { library.move(node.id, under: nil) } }
-                Divider()
-                Button("Slet", role: .destructive) {
-                    if ui.selection == .node(node.id) { ui.selection = .smart(.all) }
-                    library.deleteNode(node.id)
-                }
-            }
+            .modMenu(title: node.name, subtitle: node.isFolder ? "Mappe" : "\(node.trackIDs.count) sange") { nodeMenu() }
             if node.isFolder && open {
                 NodeTree(parent: node.id, depth: depth + 1, prompt: prompt)
             }
         }
+    }
+
+    func nodeMenu() -> [MMItem] {
+        var items = [MMItem]()
+        if node.isFolder {
+            items.append(.action("Ny playliste i mappen", icon: "music.note.list") { prompt("Ny playliste", "Ny playliste") { _ = library.createNode(name: $0, parent: node.id, folder: false) } })
+            items.append(.action("Ny mappe i mappen", icon: "folder.fill.badge.plus") { prompt("Ny mappe", "Ny mappe") { _ = library.createNode(name: $0, parent: node.id, folder: true) } })
+            items.append(.divider)
+        }
+        items.append(.action("Omdøb…", icon: "pencil") { prompt("Omdøb", node.name) { library.rename(node.id, to: $0) } })
+        if node.parent != nil {
+            items.append(.action("Flyt ud på øverste niveau", icon: "arrow.up.left") { library.move(node.id, under: nil) })
+        }
+        items.append(.divider)
+        let id = node.id
+        let name = node.name
+        let folder = node.isFolder
+        items.append(.action("Slet", icon: "trash", destructive: true) {
+            Dialogs.shared.confirm("Slet \(folder ? "mappen" : "playlisten") \"\(name)\"?",
+                                   message: folder ? "Mappen og playlisterne i den slettes. Sangene bliver i biblioteket." : "Sangene bliver i biblioteket.",
+                                   icon: "trash.fill", button: "Slet", destructive: true) {
+                if ui.selection == .node(id) { ui.selection = .smart(.all) }
+                library.deleteNode(id)
+            }
+        })
+        return items
     }
 }
 
@@ -719,8 +727,6 @@ struct TrackListView: View {
     static let defaultSort: [KeyPathComparator<LibTrack>] = [KeyPathComparator(\LibTrack.sortAdded, order: .reverse)]
     @State private var sortOrder: [KeyPathComparator<LibTrack>] = TrackListView.defaultSort
     @State private var targeted = false
-    @State private var confirmForce: (UUID, URL, String)?
-    @State private var naming: NamePrompt?
 
     var title: String {
         switch ui.selection {
@@ -830,8 +836,19 @@ struct TrackListView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .contextMenu(forSelectionType: UUID.self) { ids in
-                    contextMenu(ids)
+                .background(RightClickArea { row, e in
+                    guard let r = row, r < rows.count else { return false }
+                    let id = rows[r].id
+                    if !ui.tableSelection.contains(id) { ui.tableSelection = [id] }
+                    let ids = ui.tableSelection.contains(id) ? ui.tableSelection : [id]
+                    let t = rows[r]
+                    let sub: String = ids.count > 1 ? "\(ids.count) sange valgt" : (t.artist.isEmpty ? t.fileName : t.artist)
+                    ModMenu.shared.show(trackMenu(ids), at: NSEvent.mouseLocation, event: e,
+                                        title: ids.count > 1 ? "\(ids.count) sange" : t.title, subtitle: sub)
+                    return true
+                })
+                .contextMenu(forSelectionType: UUID.self) { _ in
+                    EmptyView()
                 } primaryAction: { ids in
                     if let id = ids.first, let t = library.index.track(id) { player.load(t) }
                 }
@@ -843,16 +860,6 @@ struct TrackListView: View {
             library.importFiles(urls, into: currentPlaylist)
             return true
         } isTargeted: { targeted = $0 }
-        .alert("Er det den rigtige sang?", isPresented: Binding(get: { confirmForce != nil }, set: { if !$0 { confirmForce = nil } })) {
-            Button("Udskift alligevel") {
-                if let c = confirmForce { replace(c.0, with: c.1, force: true) }
-                confirmForce = nil
-            }
-            Button("Annullér", role: .cancel) { confirmForce = nil }
-        } message: { Text(confirmForce?.2 ?? "") }
-        .sheet(item: $naming) { p in
-            NameSheet(prompt: p) { naming = nil }
-        }
     }
 
     func dragPayload(for t: LibTrack) -> String {
@@ -860,53 +867,63 @@ struct TrackListView: View {
         return "tracks:" + ids.map(\.uuidString).joined(separator: ",")
     }
 
-    @ViewBuilder
-    func contextMenu(_ ids: Set<UUID>) -> some View {
+    func trackMenu(_ ids: Set<UUID>) -> [MMItem] {
         let list = Array(ids)
-        if let id = list.first, let t = library.index.track(id) {
-            Button("Afspil") { player.load(t) }
-            Divider()
-            Menu("Tilføj til playliste") {
-                ForEach(library.index.nodes.filter { !$0.isFolder }) { n in
-                    Button(n.name) { library.add(list, to: n.id) }
-                }
-            }
-            if let pl = currentPlaylist { Button("Fjern fra playlisten") { library.removeFromPlaylist(list, playlist: pl) } }
-            if !usb.drives.isEmpty {
-                Menu("Send til USB") {
-                    ForEach(usb.drives) { d in
-                        Menu(d.name) {
-                            Button("Ny playliste…") {
-                                naming = NamePrompt(title: "Ny playliste på \(d.name)", text: title, icon: "externaldrive.fill") { name in
-                                    let key = usb.newPlaylist(d, name: name, parent: .root, tracks: list)
-                                    ui.selection = .usbPending(d.id, key)
-                                }
-                            }
-                            Divider()
-                            ForEach((usb.contents[d.id]?.nodes ?? []).filter { !$0.folder }) { n in
-                                Button(n.name) { usb.add(list, to: d, existing: n.id); ui.selection = .usb(d.id, n.id) }
-                            }
-                        }
-                    }
-                }
-            }
-            Divider()
-            if list.count == 1 {
-                Button("Udskift fil med bedre version…") { pickReplacement(id) }
-                Button("Find bedre version gratis…") {
-                    app.findBetterRequest = t.url
-                    app.tool = .findBetter
-                }
-            }
-            Button("Analysér igen") { library.reanalyze(list) }
-            Button("Ret lydstyrke til \(Int(LoudnessPrefs.target)) LUFS") { library.fixLoudness(list, force: true) }
-            if list.contains(where: { library.index.track($0)?.originalBackup != nil }) {
-                Button("Gendan original (før lydstyrke)") { library.restoreOriginal(list) }
-            }
-            Button("Vis i Finder") { NSWorkspace.shared.activateFileViewerSelecting(list.compactMap { library.index.track($0)?.url }) }
-            Divider()
-            Button("Fjern fra biblioteket", role: .destructive) { library.remove(list) }
+        guard let id = list.first, let t = library.index.track(id) else { return [] }
+        var items = [MMItem]()
+        items.append(.action("Afspil", icon: "play.fill") { player.load(t) })
+        items.append(.divider)
+        let playlists: [MMItem] = library.index.nodes.filter { !$0.isFolder }.map { (n: LibNode) -> MMItem in
+            MMItem.action(n.name, icon: "music.note.list") { library.add(list, to: n.id) }
         }
+        items.append(.submenu("Tilføj til playliste", icon: "text.badge.plus", playlists))
+        if let pl = currentPlaylist {
+            items.append(.action("Fjern fra playlisten", icon: "minus.circle") { library.removeFromPlaylist(list, playlist: pl) })
+        }
+        if !usb.drives.isEmpty {
+            let drives: [MMItem] = usb.drives.map { (d: UsbDrive) -> MMItem in
+                var sub = [MMItem]()
+                sub.append(.action("Ny playliste…", icon: "plus") {
+                    Dialogs.shared.name(NamePrompt(title: "Ny playliste på \(d.name)", text: title, icon: "externaldrive.fill") { name in
+                        let key = usb.newPlaylist(d, name: name, parent: .root, tracks: list)
+                        ui.selection = .usbPending(d.id, key)
+                    })
+                })
+                let existing = (usb.contents[d.id]?.nodes ?? []).filter { !$0.folder }
+                if !existing.isEmpty { sub.append(.divider) }
+                for n in existing {
+                    sub.append(.action(n.name, icon: "music.note.list") { usb.add(list, to: d, existing: n.id); ui.selection = .usb(d.id, n.id) })
+                }
+                return .submenu(d.name, icon: "externaldrive.fill", sub)
+            }
+            items.append(.submenu("Send til USB", icon: "square.and.arrow.up", drives))
+        }
+        items.append(.divider)
+        if list.count == 1 {
+            items.append(.action("Udskift fil med bedre version…", icon: "arrow.triangle.2.circlepath") { pickReplacement(id) })
+            items.append(.action("Find bedre version gratis…", icon: "sparkle.magnifyingglass") {
+                app.findBetterRequest = t.url
+                app.tool = .findBetter
+            })
+        }
+        items.append(.action("Analysér igen", icon: "waveform.path.ecg") { library.reanalyze(list) })
+        items.append(.action("Ret lydstyrke til \(Int(LoudnessPrefs.target)) LUFS", icon: "dial.medium") { library.fixLoudness(list, force: true) })
+        if list.contains(where: { library.index.track($0)?.originalBackup != nil }) {
+            items.append(.action("Gendan original (før lydstyrke)", icon: "clock.arrow.circlepath") { library.restoreOriginal(list) })
+        }
+        items.append(.action("Vis i Finder", icon: "folder") {
+            NSWorkspace.shared.activateFileViewerSelecting(list.compactMap { library.index.track($0)?.url })
+        })
+        items.append(.divider)
+        let what: String = list.count == 1 ? "\"\(t.title)\"" : "\(list.count) sange"
+        items.append(.action("Fjern fra biblioteket", icon: "trash", destructive: true) {
+            Dialogs.shared.confirm("Fjern \(what) fra biblioteket?",
+                                   message: "Filerne bliver liggende på din Mac – de forsvinder kun fra MODULR og dine playlister.",
+                                   icon: "trash.fill", button: "Fjern", destructive: true) {
+                library.remove(list)
+            }
+        })
+        return items
     }
 
     func pickReplacement(_ id: UUID) {
@@ -927,7 +944,10 @@ struct TrackListView: View {
                 let text = error.localizedDescription
                 await MainActor.run {
                     if text.contains("match") || text.contains("version") {
-                        confirmForce = (id, url, text + ". Skal filen alligevel erstatte den gamle?")
+                        Dialogs.shared.confirm("Er det den rigtige sang?", message: text + ". Skal filen alligevel erstatte den gamle?",
+                                               icon: "exclamationmark.triangle.fill", button: "Udskift alligevel") {
+                            replace(id, with: url, force: true)
+                        }
                     } else {
                         library.lastMessage = "⛔️ \(text) – intet er ændret."
                     }
@@ -1102,12 +1122,14 @@ struct UsbTree: View {
                 SideRow(icon: "externaldrive.fill", title: drive.name, count: c?.tracks?.count,
                         active: ui.selection == .usb(drive.id, nil)) { ui.selection = .usb(drive.id, nil) }
             }
-            .contextMenu {
-                Button("Ny playliste…") { prompt("Ny playliste på \(drive.name)", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .root) } }
-                Button("Ny mappe…") { prompt("Ny mappe på \(drive.name)", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .root) } }
-                Divider()
-                Button("Læs igen") { usb.load(drive) }
-                Button("Skub ud") { usb.eject(drive) }
+            .modMenu(title: drive.name, subtitle: "rekordbox-USB") {
+                [
+                    .action("Ny playliste…", icon: "music.note.list") { prompt("Ny playliste på \(drive.name)", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .root) } },
+                    .action("Ny mappe…", icon: "folder.fill.badge.plus") { prompt("Ny mappe på \(drive.name)", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .root) } },
+                    .divider,
+                    .action("Læs igen", icon: "arrow.clockwise") { usb.load(drive) },
+                    .action("Skub ud", icon: "eject.fill") { usb.eject(drive) },
+                ]
             }
             if open {
                 if usb.loading.contains(drive.id) { ProgressView().controlSize(.small).padding(4) }
@@ -1129,8 +1151,8 @@ struct UsbTree: View {
                 ForEach(pending.filter { $0.kind == .folder && $0.parent == .root }) { f in
                     SideRow(icon: "folder.fill", title: f.name + "  •ny", count: nil, active: false, italic: true) {}
                         .padding(.leading, 14)
-                        .contextMenu {
-                            Button("Ny playliste i mappen…") { prompt("Ny playliste", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .new(f.key)) } }
+                        .modMenu(title: f.name) {
+                            [.action("Ny playliste i mappen…", icon: "music.note.list") { prompt("Ny playliste", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .new(f.key)) } }]
                         }
                     ForEach(pending.filter { $0.kind == .playlist && $0.parent == .new(f.key) }) { p in
                         SideRow(icon: "music.note.list", title: p.name + "  •ny", count: p.tracks.count,
@@ -1161,6 +1183,18 @@ struct UsbNodeTree: View {
     let depth: Int
     let prompt: (String, String, @escaping (String) -> Void) -> Void
 
+    func usbFolderMenu(_ n: UsbNodeInfo) -> [MMItem] {
+        guard n.folder else { return [] }
+        var items = [MMItem]()
+        items.append(.action("Ny playliste i mappen…", icon: "music.note.list") {
+            prompt("Ny playliste", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .existing(n.id)) }
+        })
+        items.append(.action("Ny mappe i mappen…", icon: "folder.fill.badge.plus") {
+            prompt("Ny mappe", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .existing(n.id)) }
+        })
+        return items
+    }
+
     /// Værn mod en beskadiget database, hvor en mappe peger på sig selv.
     func usbChildren() -> [UsbNodeInfo] {
         if depth > 24 { return [] }
@@ -1189,12 +1223,7 @@ struct UsbNodeTree: View {
                 usb.add(ids, to: drive, existing: n.id)
                 return true
             }
-            .contextMenu {
-                if n.folder {
-                    Button("Ny playliste i mappen…") { prompt("Ny playliste", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .existing(n.id)) } }
-                    Button("Ny mappe i mappen…") { prompt("Ny mappe", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .existing(n.id)) } }
-                }
-            }
+            .modMenu(title: n.name) { usbFolderMenu(n) }
             if n.folder {
                 UsbNodeTree(drive: drive, parent: n.id, depth: depth + 1, prompt: prompt)
                 ForEach(pending.filter { $0.parent == .existing(n.id) }) { p in

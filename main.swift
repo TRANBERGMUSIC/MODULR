@@ -189,12 +189,8 @@ struct ContentView: View {
                 Button("Tilføj filer eller mapper…") { openPanel() }
                     .buttonStyle(.ember)
                 if !model.rows.isEmpty {
-                    Picker("", selection: $filter) {
-                        Text("Alle").tag(Filter.all)
-                        Text("Kun problemer").tag(Filter.problems)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 200)
+                    ModSegmented(selection: $filter, options: [(Filter.all, "Alle"), (Filter.problems, "Kun problemer")])
+                        .frame(width: 230)
                 }
                 Spacer()
                 if !model.rows.isEmpty {

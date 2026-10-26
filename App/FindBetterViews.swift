@@ -103,18 +103,17 @@ struct FindBetterToolView: View {
                              onFile: { file, source, title in model.browserDownloaded(file: file, sourceURL: source, ticket: ticket, pageTitle: title) },
                              onClose: { model.gateClosed() })
         }
-        .alert("Åbn download-gate?", isPresented: Binding(
-            get: { model.pendingGateCandidate != nil },
-            set: { if !$0 { model.pendingGateCandidate = nil } }
-        )) {
-            Button("Åbn") {
-                if let page = model.pendingGateCandidate?.page { model.openGate(page) }
+        .onReceive(model.$pendingGateCandidate) { c in
+            guard let c, let page = c.page else { return }
+            let own: Bool = model.settings.useSystemBrowser
+            Dialogs.shared.confirm("Åbn download-gate?",
+                                   message: own
+                                       ? "Siden åbner i din egen browser, hvor du er logget ind (også med Google). Gennemfør trinene der – MODULR fanger filen i Overførsler og tjekker den."
+                                       : "Siden åbner i MODULRs browser. Du gennemfører selv trinene (fx follow eller e-mail). MODULR klikker ikke for dig og fanger kun filen, siden selv giver dig.",
+                                   icon: "lock.open.fill", button: "Åbn",
+                                   cancel: { model.pendingGateCandidate = nil }) {
+                model.openGate(page)
             }
-            Button("Annullér", role: .cancel) { model.pendingGateCandidate = nil }
-        } message: {
-            Text(model.settings.useSystemBrowser
-                 ? "Siden åbner i din egen browser, hvor du er logget ind (også med Google). Gennemfør trinene der – MODULR fanger filen i Overførsler og tjekker den."
-                 : "Siden åbner i MODULRs browser. Du gennemfører selv trinene (fx follow eller e-mail). MODULR klikker ikke for dig og fanger kun filen, siden selv giver dig.")
         }
     }
 

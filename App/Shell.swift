@@ -55,6 +55,7 @@ struct RootView: View {
             }
         }
         .background(Color.void)
+        .overlay(DialogHost())
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: model.findBetterRequest) { url in
             if let url {

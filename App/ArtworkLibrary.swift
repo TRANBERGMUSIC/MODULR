@@ -227,11 +227,8 @@ struct ArtworkToolView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker("", selection: $mode) {
-                    ForEach(ArtworkMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 440)
+                ModSegmented(selection: $mode, options: ArtworkMode.allCases.map { ($0, $0.rawValue) })
+                    .frame(width: 440)
                 Spacer()
             }
             .padding(.horizontal, 24)
@@ -337,11 +334,16 @@ struct ArtworkTile: View {
                 .foregroundStyle(.secondary)
         }
         .frame(width: 170)
-        .contextMenu {
-            Button("Udskift med bedre billede…") { pickReplacement() }
-            Button("Vis i Finder") { NSWorkspace.shared.activateFileViewerSelecting([library.imageURL(entry)]) }
-            Divider()
-            Button("Slet fra biblioteket", role: .destructive) { library.delete(entry) }
+        .modMenu(title: entry.displayName, subtitle: "\(entry.width)×\(entry.height)") {
+            [
+                .action("Udskift med bedre billede…", icon: "photo.badge.arrow.down") { pickReplacement() },
+                .action("Vis i Finder", icon: "folder") { NSWorkspace.shared.activateFileViewerSelecting([library.imageURL(entry)]) },
+                .divider,
+                .action("Slet fra biblioteket", icon: "trash", destructive: true) {
+                    Dialogs.shared.confirm("Slet coveret?", message: "Billedet fjernes fra Artwork-biblioteket. Filerne der allerede har det, beholder det.",
+                                           icon: "trash.fill", button: "Slet", destructive: true) { library.delete(entry) }
+                },
+            ]
         }
         .help("\(entry.source)\nTræk et billede herover eller højreklik for at udskifte")
     }
