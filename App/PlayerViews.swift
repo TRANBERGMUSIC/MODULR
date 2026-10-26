@@ -298,7 +298,12 @@ struct DetailWaveform: View {
                     let a = max(0, Int(ta * prate))
                     let b = min(pcount, max(a + 1, Int(ceil(tb * prate))))
                     if a < pcount {
-                        for k in a..<b { amp = max(amp, Double(peaks[k])) }
+                        // Zoomet ind: højeste top (skarpe anslag). Zoomet ud: mest gennemsnit, så hvert kick
+                        // ikke skyder op som en tynd streg helt til kanten (de lignede grid-streger)
+                        var mx = 0.0, sum = 0.0
+                        for k in a..<b { let v = Double(peaks[k]); mx = max(mx, v); sum += v }
+                        let n = Double(b - a)
+                        amp = n <= 2 ? mx : 0.3 * mx + 0.7 * (sum / n)
                     }
                 } else {
                     let col = ta * rate

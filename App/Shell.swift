@@ -28,11 +28,12 @@ extension Tool {
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var findBetter: FindBetterModel
+    @AppStorage("ui.sidebarCollapsed") private var collapsed = false
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar()
-                .frame(width: 236)
+            Sidebar(collapsed: $collapsed)
+                .frame(width: collapsed ? 64 : 236)
             Rectangle().fill(Color.hairline).frame(width: 1)
             ZStack(alignment: .top) {
                 AppBackground()
@@ -70,8 +71,51 @@ struct Sidebar: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updater: Updater
     @EnvironmentObject var findBetter: FindBetterModel
+    @Binding var collapsed: Bool
 
     var body: some View {
+        if collapsed { compactBody } else { fullBody }
+    }
+
+    /// Foldet sammen: kun logo og ikoner (navnet vises når musen holdes over).
+    var compactBody: some View {
+        VStack(spacing: 6) {
+            if let logo = BrandImages.logo {
+                Image(nsImage: logo).resizable().interpolation(.high).scaledToFit()
+                    .frame(width: 34, height: 34)
+                    .padding(.top, 40)
+                    .padding(.bottom, 14)
+            }
+            ForEach(Tool.allCases) { t in
+                SidebarItem(tool: t, active: model.tool == t, badge: badge(for: t), compact: true) {
+                    withAnimation(.easeOut(duration: 0.15)) { model.tool = t }
+                }
+            }
+            Spacer()
+            CompactUpdate()
+            foldButton
+                .padding(.bottom, 14)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.graphite)
+    }
+
+    var foldButton: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { collapsed.toggle() }
+        } label: {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.mist.opacity(0.6))
+                .frame(width: 30, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+        }
+        .buttonStyle(.plain)
+        .help(collapsed ? "Fold menuen ud" : "Fold menuen ind")
+    }
+
+    var fullBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Brand
             ZStack(alignment: .bottomLeading) {
@@ -127,6 +171,11 @@ struct Sidebar: View {
 
             Spacer()
 
+            HStack {
+                Spacer()
+                foldButton
+            }
+            .padding(.horizontal, 12)
             UpdatePill()
                 .padding(12)
         }
@@ -153,10 +202,33 @@ struct SidebarItem: View {
     let tool: Tool
     let active: Bool
     let badge: String?
+    var compact: Bool = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
+        if compact {
+            Button(action: action) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(active ? AnyShapeStyle(Color.emberGradient) : AnyShapeStyle(Color.mist.opacity(0.6)))
+                    .frame(width: 44, height: 40)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(active ? Color.ember.opacity(0.13) : Color.white.opacity(hover ? 0.05 : 0)))
+                    .overlay(alignment: .topTrailing) {
+                        if badge != nil { Circle().fill(Color.ember).frame(width: 7, height: 7).offset(x: -6, y: 6) }
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
+            .help(tool.rawValue)
+        } else {
+            full
+        }
+    }
+
+    var full: some View {
         Button(action: action) {
             HStack(spacing: 11) {
                 Image(systemName: tool.icon)
@@ -191,6 +263,30 @@ struct SidebarItem: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+    }
+}
+
+/// Opdatering når menuen er foldet ind: en pil når der er en ny version, ellers "søg efter opdateringer".
+struct CompactUpdate: View {
+    @EnvironmentObject var updater: Updater
+
+    var body: some View {
+        switch updater.status {
+        case .available(let v):
+            Button { updater.install() } label: {
+                Image(systemName: "arrow.down.circle.fill").font(.system(size: 20)).foregroundColor(.ember)
+            }
+            .buttonStyle(.plain)
+            .help("Version \(v) er klar – klik for at opdatere")
+        case .working, .checking:
+            ProgressView().controlSize(.small)
+        default:
+            Button { updater.check(manual: true) } label: {
+                Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold)).foregroundColor(.mist.opacity(0.55))
+            }
+            .buttonStyle(.plain)
+            .help("v\(updater.currentVersion) – søg efter opdateringer")
+        }
     }
 }
 

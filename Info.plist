@@ -7,8 +7,8 @@
 	<key>CFBundleIdentifier</key><string>dk.tranbergmusic.modulr</string>
 	<key>CFBundleExecutable</key><string>MODULR</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleVersion</key><string>39</string>
-	<key>CFBundleShortVersionString</key><string>1.16.6</string>
+	<key>CFBundleVersion</key><string>40</string>
+	<key>CFBundleShortVersionString</key><string>1.16.7</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.music</string>
