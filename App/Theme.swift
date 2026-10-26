@@ -7,8 +7,9 @@ import AppKit
 extension Color {
     static let panel = Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255)
     static let hairline = Color.white.opacity(0.07)
-    static let emberGradient = LinearGradient(colors: [Color(red: 1, green: 0.42, blue: 0), Color(red: 1, green: 0.58, blue: 0.18)],
-                                              startPoint: .topLeading, endPoint: .bottomTrailing)
+    // Flad ember (taste-skill: ingen gradienter på knapper og flader). Navnet bevares, så alt bruger samme farve.
+    static let emberGradient = LinearGradient(colors: [Color(red: 1, green: 0.45, blue: 0.06), Color(red: 1, green: 0.45, blue: 0.06)],
+                                              startPoint: .top, endPoint: .bottom)
 }
 
 enum BrandImages {
@@ -25,6 +26,8 @@ struct EmberButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .foregroundColor(.void)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
             .background(
@@ -32,7 +35,6 @@ struct EmberButtonStyle: ButtonStyle {
                     .fill(Color.emberGradient)
                     .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.35)
             )
-            .shadow(color: Color.ember.opacity(enabled ? 0.35 : 0), radius: configuration.isPressed ? 2 : 8, y: 2)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
@@ -46,6 +48,8 @@ struct GhostButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .foregroundColor(.mist.opacity(enabled ? 0.9 : 0.35))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
@@ -92,30 +96,23 @@ struct PageHeader<Actions: View>: View {
     @ViewBuilder let actions: Actions
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.ember.opacity(0.14))
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.emberGradient)
-            }
-            .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.mist)
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundColor(.mist.opacity(0.5))
-                    .lineLimit(1)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.ember)
+            Text(title)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(.mist)
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundColor(.mist.opacity(0.6))
+                .lineLimit(1)
             Spacer(minLength: 12)
             actions
         }
         .padding(.horizontal, 24)
-        .padding(.top, 22)
-        .padding(.bottom, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 10)
     }
 }
 

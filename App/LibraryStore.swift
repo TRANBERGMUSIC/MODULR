@@ -221,8 +221,10 @@ final class LibraryStore: ObservableObject {
             t.hasWave = true
             t.waveVersion = LibTrack.currentWaveVersion
             t.duration = music.duration
-            if t.bpm == nil || t.bpm == 0 { t.bpm = music.bpm }
-            t.firstBeatMs = music.firstBeatMs
+            if t.gridEdited != true {
+                if t.bpm == nil || t.bpm == 0 { t.bpm = music.bpm }
+                t.firstBeatMs = music.firstBeatMs
+            }
             if t.key == nil { t.key = music.key }
             t.energy = music.energy
             if let m = try? Loudness.measure(url: url) {
@@ -259,12 +261,30 @@ final class LibraryStore: ObservableObject {
         let final = t
         update(id) { $0 = final }
         WaveformCache.shared.invalidate(id)
+        DispatchQueue.main.async {
+            if PlayerModel.shared.track?.id == id { PlayerModel.shared.refreshBands() }
+        }
         if LoudnessPrefs.autoFix, final.analysisError == nil, final.needsLoudnessFix(target: LoudnessPrefs.target) {
             enqueueLoudnessFix(id)
         }
     }
 
-    // MARK: Lydstyrke (som Platinum Notes)
+    // MARK: Lydstyrke og EQ (som Platinum Notes)
+
+    struct ProcessJob: Identifiable, Equatable {
+        enum Status: Equatable { case waiting, working, done, skipped, failed }
+        var id: UUID
+        var name: String
+        var kind: String
+        var status: Status
+        var clips: Int?
+        var limitingDB: Double?
+        var before: Double?
+        var after: Double?
+        var note: String
+    }
+
+    @Published var jobs: [ProcessJob] = []
 
     static var originalsFolder: URL {
         let music = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask)[0]
@@ -273,22 +293,38 @@ final class LibraryStore: ObservableObject {
         return d
     }
 
-    /// Retter lydstyrken på sangene (i kø, én ad gangen). `force` retter også dem du har gendannet.
+    static var processFolder: URL { sub("Behandling") }
+
+    func envelopes(_ id: UUID) -> (before: LoudnessEnvelope?, after: LoudnessEnvelope?) {
+        let b = (try? Data(contentsOf: Self.processFolder.appendingPathComponent("\(id.uuidString)-before.bin"))).flatMap(LoudnessEnvelope.init(data:))
+        let a = (try? Data(contentsOf: Self.processFolder.appendingPathComponent("\(id.uuidString)-after.bin"))).flatMap(LoudnessEnvelope.init(data:))
+        return (b, a)
+    }
+
+    private func setJob(_ job: ProcessJob) {
+        DispatchQueue.main.async {
+            if let i = self.jobs.firstIndex(where: { $0.id == job.id }) {
+                self.jobs[i] = job
+            } else {
+                self.jobs.insert(job, at: 0)
+                if self.jobs.count > 100 { self.jobs.removeLast(self.jobs.count - 100) }
+            }
+        }
+    }
+
+    /// Retter lydstyrken (i kø, én ad gangen). `force` = du bad selv om det: behandles uanset hvad.
     func fixLoudness(_ ids: [UUID], force: Bool = false) {
         if force {
             mutate { idx in
-                for i in idx.tracks.indices where ids.contains(idx.tracks[i].id) {
-                    idx.tracks[i].loudnessSkip = nil
-                    idx.tracks[i].loudnessFixedAt = nil
-                }
+                for i in idx.tracks.indices where ids.contains(idx.tracks[i].id) { idx.tracks[i].loudnessSkip = nil }
             }
         }
         let target = LoudnessPrefs.target
-        let todo = snapshot().tracks.filter { ids.contains($0.id) && $0.needsLoudnessFix(target: target) }
-        for t in todo { enqueueLoudnessFix(t.id) }
+        let todo = snapshot().tracks.filter { ids.contains($0.id) && (force || $0.needsLoudnessFix(target: target)) }
+        for t in todo { enqueueProcess(t.id, eq: nil, force: force) }
         DispatchQueue.main.async {
-            self.lastMessage = todo.isEmpty ? "Ingen sange skal have rettet lydstyrken"
-                : "Retter lydstyrken på \(todo.count) sange til \(Int(target)) LUFS …"
+            self.lastMessage = todo.isEmpty ? "Alle sange er allerede på \(Int(target)) LUFS"
+                : "Retter lydstyrken på \(todo.count) sange til \(Int(target)) LUFS – se Fiks tracks"
         }
     }
 
@@ -297,16 +333,27 @@ final class LibraryStore: ObservableObject {
         fixLoudness(snapshot().tracks.filter { $0.needsLoudnessFix(target: target) }.map(\.id))
     }
 
-    private func enqueueLoudnessFix(_ id: UUID) {
+    /// Lægger EQ'en ind i filen (og retter lydstyrken bagefter, så sangen stadig ligger på målet).
+    func applyEQ(_ id: UUID, eq: EQSettings) {
+        enqueueProcess(id, eq: eq, force: true)
+    }
+
+    private func enqueueLoudnessFix(_ id: UUID) { enqueueProcess(id, eq: nil, force: false) }
+
+    private func enqueueProcess(_ id: UUID, eq: EQSettings?, force: Bool) {
         lock.lock()
         let already = pendingFixes.contains(id)
         if !already { pendingFixes.insert(id) }
         lock.unlock()
         if already { return }
+        if let t = snapshot().track(id) {
+            setJob(ProcessJob(id: id, name: t.title, kind: eq == nil ? "Lydstyrke" : "EQ + lydstyrke", status: .waiting,
+                              before: t.lufs, note: "Venter"))
+        }
         DispatchQueue.main.async { self.fixing.insert(id) }
         fixQueue.addOperation { [weak self] in
             guard let self else { return }
-            self.fixLoudnessNow(id)
+            self.processNow(id, eq: eq, force: force)
             self.lock.lock()
             self.pendingFixes.remove(id)
             self.lock.unlock()
@@ -315,88 +362,172 @@ final class LibraryStore: ObservableObject {
     }
     private var pendingFixes = Set<UUID>()
 
-    private func fixLoudnessNow(_ id: UUID) {
+    private func processNow(_ id: UUID, eq: EQSettings?, force: Bool) {
         let target = LoudnessPrefs.target
-        guard let t = snapshot().track(id), t.needsLoudnessFix(target: target),
-              var lufs = t.lufs, var peak = t.peakDB else { return }
+        guard let t = snapshot().track(id) else { return }
+        var job = ProcessJob(id: id, name: t.title, kind: eq == nil ? "Lydstyrke" : "EQ + lydstyrke", status: .working,
+                             before: t.lufs, note: "Behandler …")
+        if eq == nil && !force && !t.needsLoudnessFix(target: target) {
+            job.status = .skipped
+            job.after = t.lufs
+            job.note = "Allerede klar"
+            setJob(job)
+            return
+        }
+        setJob(job)
         let fm = FileManager.default
         let url = t.url
-        guard fm.fileExists(atPath: url.path) else { return }
+        guard fm.fileExists(atPath: url.path) else {
+            job.status = .failed; job.note = "Filen findes ikke"; setJob(job)
+            return
+        }
 
-        // 1) Gem originalen (kun første gang – så "Gendan original" altid giver den urørte fil).
-        //    Er sangen rettet før (fx til et andet mål), arbejdes der ud fra originalen – aldrig limiter oven på limiter.
+        // 1) Originalen gemmes første gang. Er sangen behandlet før, arbejdes der ud fra originalen
+        //    (aldrig limiter oven på limiter).
         var backup = t.originalBackup
         var source = url
         if let b = backup, fm.fileExists(atPath: b) {
             source = URL(fileURLWithPath: b)
-            if let m = try? Loudness.measure(url: source) {
-                lufs = m.lufs
-                peak = m.peakDB
-            }
         } else {
             let base = url.deletingPathExtension().lastPathComponent
             let dest = Self.originalsFolder.appendingPathComponent("\(base) [\(t.id.uuidString.prefix(8))].\(url.pathExtension)")
             try? fm.removeItem(at: dest)
             do { try fm.copyItem(at: url, to: dest) } catch {
-                update(id) { $0.loudnessNote = "Kunne ikke gemme originalen – lydstyrken er ikke rettet" }
+                job.status = .failed; job.note = "Kunne ikke gemme originalen – intet er ændret"; setJob(job)
                 return
             }
             backup = dest.path
         }
 
-        // 2) Ret filen
-        var note: String
         do {
-            if t.ext == "mp3" {
-                let steps = Loudness.mp3Steps(lufs: lufs, peakDB: peak, target: target)
-                if steps == 0 {
-                    if source != url {      // rettet før – læg originalen tilbage
-                        let tmp = url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).mp3")
-                        try fm.copyItem(at: source, to: tmp)
-                        _ = try fm.replaceItemAt(url, withItemAt: tmp)
-                    }
-                    note = String(format: "%.1f LUFS – MP3 har ikke plads til at blive højere uden at klippe", lufs)
-                } else {
-                    let data = try Data(contentsOf: source)
-                    let (out, frames) = Loudness.mp3ApplyGain(data, steps: steps)
-                    guard frames > 0 else { throw LoudnessError.failed("Ingen MP3-rammer fundet") }
-                    let tmp = url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).mp3")
-                    try out.write(to: tmp)
-                    _ = try fm.replaceItemAt(url, withItemAt: tmp)
-                    note = String(format: "%+.1f dB uden genkodning", Double(steps) * 1.5)
-                }
-            } else {
-                let tag = try? AudioTagger.readTag(of: url)       // nuværende tags (cover kan være skiftet siden)
-                let (ch, sr) = try Loudness.read(url: source)
-                let (out, res) = Loudness.normalizePCM(ch, sr: sr, target: target, maxLimitingDB: Loudness.maxLimitingDB)
-                let tmp = url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).\(url.pathExtension)")
-                try Loudness.writePCM(out, sr: sr, to: tmp)
-                // Tags og cover med over
-                if let tag, let frames = ID3.parse(tag)?.frames, !frames.isEmpty {
-                    try? AudioTagger.setFrames(frames, on: tmp)
-                }
-                _ = try fm.replaceItemAt(url, withItemAt: tmp)
-                note = res.note
-                if res.limitingDB > 0.1 { note += String(format: " · limiter %.1f dB", res.limitingDB) }
-            }
-        } catch {
-            let msg = error.localizedDescription
-            update(id) { $0.loudnessNote = "Kunne ikke rette lydstyrken: \(msg)"; $0.originalBackup = backup }
-            return
-        }
+            let (srcCh, sr) = try Loudness.read(url: source)
+            let beforeEnv = Loudness.envelope(srcCh)
+            let clips = Loudness.countClips(srcCh)
+            let lufsSrc = Loudness.integratedLUFS(srcCh, sr: sr)
+            let peakSrc = Loudness.peakDB(srcCh)
+            job.before = lufsSrc
+            job.clips = clips
+            try? beforeEnv.data.write(to: Self.processFolder.appendingPathComponent("\(id.uuidString)-before.bin"))
 
-        // 3) Mål igen
-        let m = try? Loudness.measure(url: url)
-        let size = ((try? fm.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value
-        let finalNote = note
-        update(id) {
-            if let m { $0.lufs = m.lufs; $0.peakDB = m.peakDB }
-            $0.loudnessFixedAt = target
-            $0.loudnessNote = finalNote
-            $0.originalBackup = backup
-            if $0.ext != "mp3" { $0.bitDepth = 24 }
-            if let size { $0.fileSize = size }
+            if eq == nil && !force && abs(lufsSrc - target) <= 0.5 && clips == 0 && source == url {
+                job.status = .skipped; job.after = lufsSrc; job.note = "Allerede klar"
+                setJob(job)
+                update(id) { $0.loudnessFixedAt = target; $0.loudnessNote = "Allerede på målet"; $0.originalBackup = backup }
+                return
+            }
+
+            var outURL = url
+            var note: String
+            var afterCh: [[Float]]
+            var limiting = 0.0
+            var repaired = 0
+            let steps = Loudness.mp3Steps(lufs: lufsSrc, peakDB: peakSrc, target: target)
+            let lossless = eq == nil && t.ext == "mp3" && clips < 20 && abs(lufsSrc + Double(steps) * 1.5 - target) <= 0.8
+
+            if lossless {
+                // MP3: tabsfri ændring af global_gain – ingen genkodning
+                let data = try Data(contentsOf: source)
+                let (out, frames) = Loudness.mp3ApplyGain(data, steps: steps)
+                guard frames > 0 else { throw LoudnessError.failed("Ingen MP3-rammer fundet") }
+                let tmp = url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).mp3")
+                try out.write(to: tmp)
+                _ = try fm.replaceItemAt(url, withItemAt: tmp)
+                let g = Float(pow(10, Double(steps) * 1.5 / 20))
+                afterCh = srcCh.map { $0.map { $0 * g } }
+                note = String(format: "%+.1f dB uden genkodning", Double(steps) * 1.5)
+            } else {
+                // PCM: (EQ) → klippede toppe genskabes → gain → limiter (top −1 dBFS)
+                let input = eq.map { e in (try? EQRender.render(url: source, eq: e).0) ?? srcCh } ?? srcCh
+                let (out, res) = Loudness.normalizePCM(input, sr: sr, target: target, maxLimitingDB: Loudness.maxLimitingDB)
+                limiting = res.limitingDB
+                repaired = res.clipsRepaired
+                afterCh = out
+                let keepFormat = ["wav", "aif", "aiff"].contains(t.ext)
+                if !keepFormat {
+                    // MP3/FLAC/M4A kan ikke skrives tilbage uden tab → gemmes som 24-bit WAV ved siden af
+                    let dir = url.deletingLastPathComponent()
+                    let base = url.deletingPathExtension().lastPathComponent
+                    var dest = dir.appendingPathComponent("\(base).wav")
+                    var n = 2
+                    while fm.fileExists(atPath: dest.path) {
+                        dest = dir.appendingPathComponent("\(base) (\(n)).wav")
+                        n += 1
+                    }
+                    outURL = dest
+                }
+                let tmp = outURL.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).\(outURL.pathExtension)")
+                try Loudness.writePCM(out, sr: sr, to: tmp)
+                try? AudioTagger.setFrames(tagFrames(for: t, from: url), on: tmp)
+                if outURL == url {
+                    _ = try fm.replaceItemAt(url, withItemAt: tmp)
+                } else {
+                    try fm.moveItem(at: tmp, to: outURL)
+                    try? fm.trashItem(at: url, resultingItemURL: nil)     // originalen ligger i Musik/MODULR/Originaler
+                }
+                note = res.note
+                if !keepFormat { note += " · gemt som WAV" }
+            }
+
+            let afterEnv = Loudness.envelope(afterCh)
+            try? afterEnv.data.write(to: Self.processFolder.appendingPathComponent("\(id.uuidString)-after.bin"))
+            let m = try? Loudness.measure(url: outURL)
+            let size = ((try? fm.attributesOfItem(atPath: outURL.path))?[.size] as? NSNumber)?.int64Value
+            let finalNote = note
+            let newPath = outURL.path
+            let lim = limiting
+            let rep = repaired
+            let before = lufsSrc
+            update(id) {
+                if $0.path != newPath {
+                    $0.history.append($0.path)
+                    $0.path = newPath
+                    $0.codec = "WAV"
+                }
+                if let m { $0.lufs = m.lufs; $0.peakDB = m.peakDB }
+                $0.lufsBefore = before
+                $0.loudnessFixedAt = target
+                $0.loudnessNote = finalNote
+                $0.originalBackup = backup
+                $0.limitingDB = lim
+                $0.clipsRepaired = rep
+                if let eq { $0.eqApplied = [eq.low, eq.mid, eq.high] } else if source != url { $0.eqApplied = nil }
+                if !lossless { $0.bitDepth = 24 }
+                if let size { $0.fileSize = size }
+            }
+            job.status = .done
+            job.after = m?.lufs
+            job.limitingDB = limiting
+            job.clips = max(clips, repaired)
+            job.note = finalNote
+            setJob(job)
+            if eq != nil || outURL != url { reanalyze([id]) }
+        } catch {
+            job.status = .failed
+            job.note = "Fejl: \(error.localizedDescription) – intet er ændret"
+            setJob(job)
+            update(id) { $0.loudnessNote = job.note; $0.originalBackup = backup }
         }
+    }
+
+    /// Tags og cover til den behandlede fil: filens egne ID3-frames, ellers MODULRs data.
+    private func tagFrames(for t: LibTrack, from url: URL) -> [ID3.Frame] {
+        if let tag = try? AudioTagger.readTag(of: url), let frames = ID3.parse(tag)?.frames, !frames.isEmpty { return frames }
+        var frames = [ID3.Frame]()
+        let yearText: String? = t.year.map { String($0) }
+        let bpmText: String? = t.bpm.map { String(Int($0.rounded())) }
+        var values = [(String, String?)]()
+        values.append(("TIT2", t.title))
+        values.append(("TPE1", t.artist))
+        values.append(("TALB", t.album))
+        values.append(("TCON", t.genre))
+        values.append(("TYER", yearText))
+        values.append(("TBPM", bpmText))
+        values.append(("TKEY", t.key?.classic))
+        for (fid, v) in values { if let v, !v.isEmpty { frames.append(ID3.textFrame(fid, v)) } }
+        if let a = artURL(t), let raw = try? Data(contentsOf: a), let cdj = ArtworkImage.cdjJPEG(data: raw) {
+            frames.append(ID3.pictureFrame(jpeg: cdj))
+        }
+        return frames
     }
 
     /// Lægger den urørte original tilbage og lader den være.
@@ -409,22 +540,75 @@ final class LibraryStore: ObservableObject {
         var n = 0
         for t in snapshot().tracks where ids.contains(t.id) {
             guard let b = t.originalBackup, fm.fileExists(atPath: b) else { continue }
-            let tmp = t.url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).\(t.ext)")
+            let backupURL = URL(fileURLWithPath: b)
+            var dest = t.url
             do {
-                try fm.copyItem(at: URL(fileURLWithPath: b), to: tmp)
-                _ = try fm.replaceItemAt(t.url, withItemAt: tmp)
+                if backupURL.pathExtension.lowercased() == t.ext {
+                    let tmp = t.url.deletingLastPathComponent().appendingPathComponent(".modulr-\(UUID().uuidString).\(t.ext)")
+                    try fm.copyItem(at: backupURL, to: tmp)
+                    _ = try fm.replaceItemAt(t.url, withItemAt: tmp)
+                } else {
+                    // Blev gemt som WAV – læg den oprindelige MP3/FLAC tilbage og fjern WAV'en
+                    let dir = t.url.deletingLastPathComponent()
+                    let base = t.url.deletingPathExtension().lastPathComponent
+                    dest = dir.appendingPathComponent("\(base).\(backupURL.pathExtension)")
+                    var k = 2
+                    while fm.fileExists(atPath: dest.path) {
+                        dest = dir.appendingPathComponent("\(base) (\(k)).\(backupURL.pathExtension)")
+                        k += 1
+                    }
+                    try fm.copyItem(at: backupURL, to: dest)
+                    try? fm.trashItem(at: t.url, resultingItemURL: nil)
+                }
             } catch { continue }
-            let m = try? Loudness.measure(url: t.url)
+            let m = try? Loudness.measure(url: dest)
+            let newPath = dest.path
             update(t.id) {
+                if $0.path != newPath {
+                    $0.history.append($0.path)
+                    $0.path = newPath
+                    $0.codec = dest.pathExtension.uppercased()
+                }
                 if let m { $0.lufs = m.lufs; $0.peakDB = m.peakDB }
                 $0.loudnessFixedAt = nil
                 $0.loudnessSkip = true
+                $0.eqApplied = nil
+                $0.limitingDB = nil
+                $0.clipsRepaired = nil
                 $0.loudnessNote = "Original gendannet"
             }
+            reanalyze([t.id])
             n += 1
         }
         let count = n
         DispatchQueue.main.async { self.lastMessage = count > 0 ? "\(count) originaler gendannet" : "Ingen originaler at gendanne" }
+    }
+
+    // MARK: Grid og markeringer
+
+    func setGrid(_ id: UUID, bpm: Double, firstBeatMs: Double) {
+        update(id) {
+            $0.bpm = max(40, min(300, bpm))
+            $0.firstBeatMs = firstBeatMs
+            $0.gridEdited = true
+        }
+    }
+
+    func addCue(_ id: UUID, at seconds: Double) {
+        update(id) {
+            var c = $0.cues ?? []
+            if !c.contains(where: { abs($0 - seconds) < 0.05 }) { c.append(seconds) }
+            $0.cues = c.sorted()
+        }
+    }
+
+    func removeCue(_ id: UUID, near seconds: Double, tolerance: Double) {
+        update(id) {
+            guard var c = $0.cues, let i = c.indices.min(by: { abs(c[$0] - seconds) < abs(c[$1] - seconds) }),
+                  abs(c[i] - seconds) <= tolerance else { return }
+            c.remove(at: i)
+            $0.cues = c
+        }
     }
 
     func update(_ id: UUID, _ change: (inout LibTrack) -> Void) {
@@ -661,9 +845,7 @@ final class WaveformCache {
         for w in [120, 192, 600, 1200, 2400] { cache.removeObject(forKey: "\(id.uuidString)-\(w)" as NSString) }
     }
 
-    /// RGB-waveform som rekordbox: bas = rød, mellem = grøn, diskant = blå; højde = det kraftigste bånd.
-    /// RGB-waveform som i rekordbox: tegnes nedefra; bas = rød, mellem = grøn, diskant = blå.
-    /// Farven bestemmes af det dominerende bånd i hver kolonne, højden af det kraftigste.
+    /// RGB-waveform som i rekordbox: tegnes nedefra; farven via WaveColor (bas rød, mellem grøn, diskant blå).
     func image(for t: LibTrack, width: Int, height: Int, store: LibraryStore) -> CGImage? {
         let key = "\(t.id.uuidString)-\(width)" as NSString
         if let img = cache.object(forKey: key) { return img }
@@ -671,48 +853,19 @@ final class WaveformCache {
         guard bands.count >= 3 else { return nil }
         let cols = bands.count / 3
         var px = [UInt8](repeating: 0, count: width * height * 4)
-        let red: (Double, Double, Double) = (1.0, 0.22, 0.16)
-        let green: (Double, Double, Double) = (0.35, 0.95, 0.35)
-        let blue: (Double, Double, Double) = (0.30, 0.50, 1.0)
         for x in 0..<width {
             let a = x * cols / width
             let b = max(a + 1, (x + 1) * cols / width)
-            var mx: [Double] = [0, 0, 0]
-            var sum: [Double] = [0, 0, 0]
-            var n = 0.0
-            for c in a..<min(b, cols) {
-                for k in 0..<3 {
-                    let v = Double(bands[c * 3 + k])
-                    if v > mx[k] { mx[k] = v }
-                    sum[k] += v
-                }
-                n += 1
-            }
-            guard n > 0 else { continue }
-            // blød top: blanding af gennemsnit og maksimum
-            var v: [Double] = [0, 0, 0]
-            for k in 0..<3 { v[k] = 0.55 * (sum[k] / n) + 0.45 * mx[k] }
-            let top: Double = max(v[0], max(v[1], v[2]))
-            guard top > 0 else { continue }
-            // dominerende bånd vægtes (kvadreret andel)
-            let rl: Double = (v[0] / top) * (v[0] / top)
-            let rm: Double = (v[1] / top) * (v[1] / top)
-            let rh: Double = (v[2] / top) * (v[2] / top)
-            let rs: Double = max(1e-6, rl + rm + rh)
-            var cr: Double = (rl * red.0 + rm * green.0 + rh * blue.0) / rs
-            var cg: Double = (rl * red.1 + rm * green.1 + rh * blue.1) / rs
-            var cb: Double = (rl * red.2 + rm * green.2 + rh * blue.2) / rs
-            let cmax: Double = max(cr, max(cg, cb))
-            cr /= cmax; cg /= cmax; cb /= cmax
-            let h: Int = Int((top / 255 * Double(height)).rounded())
+            guard let col = WaveColor.column(bands, a, b) else { continue }
+            let h: Int = Int((col.height * Double(height)).rounded())
             guard h > 0 else { continue }
             for yy in 0..<min(h, height) {
-                let shade: Double = 0.7 + 0.3 * Double(yy) / Double(max(1, h))
+                let shade: Double = 0.74 + 0.26 * Double(yy) / Double(max(1, h))
                 let row = height - 1 - yy
                 let i = (row * width + x) * 4
-                px[i] = UInt8(min(255, cr * shade * 255))
-                px[i + 1] = UInt8(min(255, cg * shade * 255))
-                px[i + 2] = UInt8(min(255, cb * shade * 255))
+                px[i] = UInt8(min(255, col.r * shade * 255))
+                px[i + 1] = UInt8(min(255, col.g * shade * 255))
+                px[i + 2] = UInt8(min(255, col.b * shade * 255))
                 px[i + 3] = 255
             }
         }

@@ -18,6 +18,10 @@ VÆRKTØJER (i venstre side)
     harmoniske naboer lyser op.
   * Playlister og mapper: "+" ved PLAYLISTER. Træk sange over på en playliste.
   * Dobbeltklik på en sang for at afspille den.
+  * AFSPILLEREN: vælg en sang, så vises den i stor waveform med grid. Zoom med
+    +/- eller knib på pegefeltet. Orange streg = ny frase (8 takter). "Grid"
+    retter BPM og første slag, "Markører" sætter streger hvor du vil mixe,
+    "EQ" giver bas/mellem/diskant, og måleren viser om sangen går i det røde.
   * FIKS TRACKS: alle sange måles (LUFS) og rettes automatisk til samme
     klubniveau (standard -9 LUFS), så du aldrig skal røre gain-knappen.
     WAV/AIFF får gain + limiter (top -1 dBFS) og gemmes som 24-bit, MP3 rettes

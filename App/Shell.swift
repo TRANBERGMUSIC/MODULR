@@ -195,6 +195,23 @@ struct SidebarItem: View {
 }
 
 /// Version og opdateringsstatus nederst i sidebaren.
+/// Lille ember-prik der pulserer roligt.
+struct PulsingDot: View {
+    @State private var on = false
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.ember.opacity(0.35)).frame(width: 12, height: 12)
+                .scaleEffect(on ? 1.15 : 0.5).opacity(on ? 0 : 1)
+            Circle().fill(Color.ember).frame(width: 7, height: 7)
+        }
+        .frame(width: 12, height: 12)
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on = true }
+        }
+    }
+}
+
 struct UpdatePill: View {
     @EnvironmentObject var updater: Updater
 
@@ -202,12 +219,26 @@ struct UpdatePill: View {
         HStack(spacing: 8) {
             switch updater.status {
             case .available(let v):
-                Circle().fill(Color.ember).frame(width: 7, height: 7)
-                Text("Version \(v) er klar").font(.system(size: 11, weight: .semibold)).foregroundColor(.mist)
-                Spacer()
-                Button("Opdatér") { updater.install() }
+                // To linjer, så intet brydes, uanset hvor smal sidebaren bliver
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 7) {
+                        PulsingDot()
+                        Text("Version \(v) er klar")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.mist)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: 0)
+                    }
+                    Button { updater.install() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down.circle.fill")
+                            Text("Opdatér nu").lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                     .buttonStyle(.ember)
-                    .controlSize(.small)
+                }
             case .working(let m):
                 ProgressView().controlSize(.mini)
                 Text(m).font(.system(size: 11)).foregroundColor(.mist.opacity(0.7)).lineLimit(1)

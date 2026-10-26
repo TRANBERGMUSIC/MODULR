@@ -22,67 +22,6 @@ final class LibraryUIState: ObservableObject {
     @Published var tableSelection: Set<UUID> = []
 }
 
-// MARK: - Afspiller
-
-final class PlayerModel: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published var track: LibTrack?
-    @Published var playing = false
-    @Published var position: Double = 0
-    @Published var duration: Double = 0
-    private var player: AVAudioPlayer?
-    private var timer: Timer?
-
-    func load(_ t: LibTrack, autoplay: Bool = true) {
-        stop()
-        track = t
-        guard let p = try? AVAudioPlayer(contentsOf: t.url) else { return }
-        p.delegate = self
-        p.prepareToPlay()
-        player = p
-        duration = p.duration
-        position = 0
-        if autoplay { play() }
-    }
-
-    func play() {
-        guard let p = player else { return }
-        p.play()
-        playing = true
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            guard let self, let p = self.player else { return }
-            self.position = p.currentTime
-        }
-    }
-
-    func pause() {
-        player?.pause()
-        playing = false
-        timer?.invalidate()
-    }
-
-    func toggle() { playing ? pause() : play() }
-
-    func seek(_ fraction: Double) {
-        guard let p = player else { return }
-        p.currentTime = max(0, min(p.duration, fraction * p.duration))
-        position = p.currentTime
-    }
-
-    func stop() {
-        player?.stop()
-        timer?.invalidate()
-        playing = false
-    }
-
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        DispatchQueue.main.async {
-            self.playing = false
-            self.timer?.invalidate()
-        }
-    }
-}
-
 // MARK: - Sortering i tabellen
 
 extension LibTrack {
@@ -104,17 +43,22 @@ struct LibraryView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var usb: UsbStore
     @StateObject private var ui = LibraryUIState()
-    @StateObject private var player = PlayerModel()
+    private let player = PlayerModel.shared
 
     var body: some View {
         HStack(spacing: 0) {
             LibrarySidebar()
-                .frame(width: 280)
+                .frame(width: 248)
             Rectangle().fill(Color.hairline).frame(width: 1)
-            VStack(spacing: 0) {
-                PlayerPanel()
-                    .padding(.horizontal, 20)
+            VStack(spacing: 8) {
+                let fixing: Bool = ui.selection == .smart(.upgrade)
+                PlayerPanel(compact: fixing)
+                    .padding(.horizontal, 16)
                     .padding(.top, 4)
+                if fixing {
+                    ProcessPanel()
+                        .padding(.horizontal, 16)
+                }
                 switch ui.selection {
                 case .usb(let drive, let node):
                     UsbPlaylistView(driveID: drive, nodeID: node)
@@ -147,6 +91,11 @@ struct NameSheet: View {
     let close: () -> Void
     @State private var text: String = ""
     @FocusState private var focused: Bool
+
+    init(prompt: NamePrompt, close: @escaping () -> Void) {
+        self.prompt = prompt
+        self.close = close
+    }
 
     var trimmed: String { text.trimmingCharacters(in: .whitespaces) }
 
@@ -230,7 +179,7 @@ struct LibrarySidebar: View {
                 .buttonStyle(.ember)
                 .padding(.horizontal, 14)
 
-                sectionHeader("BIBLIOTEK")
+                sectionHeader("Bibliotek")
                 VStack(spacing: 2) {
                     ForEach(SmartList.allCases) { s in
                         let count = library.index.tracks.filter(s.matches).count
@@ -246,7 +195,7 @@ struct LibrarySidebar: View {
                 .padding(.horizontal, 8)
 
                 HStack {
-                    sectionHeader("PLAYLISTER")
+                    sectionHeader("Playlister")
                     Spacer()
                     ModMenuButton(items: {
                         [
@@ -300,11 +249,10 @@ struct LibrarySidebar: View {
 
     func sectionHeader(_ s: String) -> some View {
         Text(s)
-            .font(.system(size: 9, weight: .bold))
-            .tracking(2)
-            .foregroundColor(.mist.opacity(0.35))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(.mist.opacity(0.55))
             .padding(.horizontal, 18)
-            .padding(.top, 4)
+            .padding(.top, 6)
     }
 
     func addTracks() {
@@ -565,91 +513,6 @@ struct RingSegment: Shape {
     }
 }
 
-// MARK: - Afspiller-panel
-
-struct PlayerPanel: View {
-    @EnvironmentObject var player: PlayerModel
-    @EnvironmentObject var library: LibraryStore
-
-    var body: some View {
-        Panel(padding: 14) {
-            HStack(spacing: 16) {
-                Cover(track: player.track, size: 76)
-                VStack(alignment: .leading, spacing: 8) {
-                    if let t = player.track {
-                        HStack(spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(t.title).font(.system(size: 15, weight: .semibold)).foregroundColor(.mist).lineLimit(1)
-                                Text(t.artist.isEmpty ? "Ukendt kunstner" : t.artist).font(.system(size: 12)).foregroundColor(.mist.opacity(0.55)).lineLimit(1)
-                            }
-                            Spacer()
-                            if let k = t.key { KeyPill(key: k) }
-                            Text(t.bpmText + " BPM").font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundColor(.mist.opacity(0.8))
-                            QualityText(track: t)
-                        }
-                        BigWaveform(track: t)
-                            .frame(height: 54)
-                    } else {
-                        Text("Dobbeltklik på en sang for at afspille den")
-                            .font(.system(size: 15, weight: .semibold)).foregroundColor(.mist)
-                        Text("Se waveform, BPM, toneart og kvalitet – og hør om filen er god nok til klubben.")
-                            .font(.system(size: 12)).foregroundColor(.mist.opacity(0.5))
-                    }
-                }
-                Button {
-                    player.toggle()
-                } label: {
-                    Image(systemName: player.playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.void)
-                        .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.emberGradient))
-                        .shadow(color: Color.ember.opacity(0.4), radius: 10)
-                }
-                .buttonStyle(.plain)
-                .disabled(player.track == nil)
-            }
-        }
-    }
-}
-
-struct BigWaveform: View {
-    @EnvironmentObject var player: PlayerModel
-    @ObservedObject private var library = LibraryStore.shared
-    let track: LibTrack
-
-    var body: some View {
-        GeometryReader { geo in
-            let frac: CGFloat = player.duration > 0 ? CGFloat(player.position / player.duration) : 0
-            let w: CGFloat = geo.size.width
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.35))
-                if let img = WaveformCache.shared.image(for: track, width: 1200, height: 80, store: library) {
-                    Image(decorative: img, scale: 1).resizable().interpolation(.medium)
-                        .opacity(0.45)
-                    Image(decorative: img, scale: 1).resizable().interpolation(.medium)
-                        .mask(alignment: .leading) { Rectangle().frame(width: w * frac) }
-                } else {
-                    Text(library.analyzing.contains(track.id) ? "Analyserer …" : "Ingen waveform endnu")
-                        .font(.caption).foregroundColor(.mist.opacity(0.4)).frame(maxWidth: .infinity)
-                }
-                Rectangle().fill(Color.white).frame(width: 2).offset(x: w * frac - 1)
-                HStack {
-                    Text(timeText(player.position))
-                    Spacer()
-                    Text("-" + timeText(max(0, player.duration - player.position)))
-                }
-                .font(.system(size: 10, weight: .semibold)).monospacedDigit().foregroundColor(.mist.opacity(0.7))
-                .padding(.horizontal, 6).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
-            }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onChanged { v in player.seek(Double(v.location.x / w)) })
-        }
-    }
-
-    func timeText(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
-}
-
 struct Cover: View {
     private let library = LibraryStore.shared
     let track: LibTrack?
@@ -723,7 +586,7 @@ struct TrackListView: View {
     @EnvironmentObject var settings: FBSettings
     @EnvironmentObject var app: AppModel
     @EnvironmentObject var ui: LibraryUIState
-    @EnvironmentObject var player: PlayerModel
+    private let player = PlayerModel.shared
     static let defaultSort: [KeyPathComparator<LibTrack>] = [KeyPathComparator(\LibTrack.sortAdded, order: .reverse)]
     @State private var sortOrder: [KeyPathComparator<LibTrack>] = TrackListView.defaultSort
     @State private var targeted = false
@@ -764,8 +627,8 @@ struct TrackListView: View {
         let rows = self.rows
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(title.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundColor(.mist)
-                Text("(\(rows.count) sange)").font(.system(size: 12)).foregroundColor(.mist.opacity(0.45))
+                Text(title).font(.system(size: 18, weight: .semibold)).foregroundColor(.mist).lineLimit(1)
+                Text("\(rows.count) sange").font(.system(size: 12)).monospacedDigit().foregroundColor(.mist.opacity(0.6))
                 if !library.analyzing.isEmpty {
                     ProgressView().controlSize(.small)
                     Text("Analyserer \(library.analyzing.count) …").font(.system(size: 11)).foregroundColor(.mist.opacity(0.5))
@@ -775,25 +638,16 @@ struct TrackListView: View {
                     Text("Retter lydstyrke på \(library.fixing.count) …").font(.system(size: 11)).foregroundColor(Color.ember.opacity(0.85))
                 }
                 Spacer()
-                if case .smart(.upgrade) = ui.selection {
-                    Button {
-                        library.fixAllLoudness()
-                    } label: {
-                        Label("Ret lydstyrke nu", systemImage: "dial.medium")
-                    }
-                    .buttonStyle(.ember)
-                    .help("Alle sange rettes til \(Int(LoudnessPrefs.target)) LUFS – originalerne gemmes i Musik/MODULR/Originaler")
-                }
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundColor(.mist.opacity(0.4))
-                    TextField("Søg", text: $ui.search).textFieldStyle(.plain).frame(width: 180)
+                    TextField("Søg", text: $ui.search).textFieldStyle(.plain).frame(minWidth: 90, maxWidth: 180)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.hairline))
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.vertical, 8)
             if let m = library.lastMessage {
                 HStack {
                     Text(m).font(.system(size: 12)).foregroundColor(.mist.opacity(0.75))
@@ -810,25 +664,23 @@ struct TrackListView: View {
             } else {
                 Table(of: LibTrack.self, selection: $ui.tableSelection, sortOrder: $sortOrder) {
                     TableColumn("") { (t: LibTrack) in WaveCell(track: t) }
-                        .width(104)
-                    TableColumn("") { (t: LibTrack) in Cover(track: t, size: 28) }
-                        .width(34)
+                        .width(84)
+                    TableColumn("") { (t: LibTrack) in Cover(track: t, size: 26) }
+                        .width(30)
                     TableColumn("Kunstner", value: \LibTrack.artist) { (t: LibTrack) in ArtistCell(track: t) }
-                        .width(min: 110, ideal: 170)
+                        .width(min: 70, ideal: 130)
                     TableColumn("Titel", value: \LibTrack.title) { (t: LibTrack) in TitleCell(track: t) }
-                        .width(min: 160, ideal: 280)
+                        .width(min: 110, ideal: 220)
                     TableColumn("Key", value: \LibTrack.sortKey) { (t: LibTrack) in KeyCell(track: t) }
-                        .width(56)
+                        .width(78)
                     TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
-                        .width(48)
-                    TableColumn("Toneart", value: \LibTrack.sortKey) { (t: LibTrack) in ClassicKeyCell(track: t) }
-                        .width(58)
+                        .width(40)
                     TableColumn("Energi", value: \LibTrack.sortEnergy) { (t: LibTrack) in EnergyBar(value: t.energy) }
-                        .width(70)
+                        .width(52)
                     TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
-                        .width(56)
+                        .width(46)
                     TableColumn("Kvalitet · LUFS", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
-                        .width(min: 130, ideal: 170)
+                        .width(min: 130, ideal: 150)
                 } rows: {
                     ForEach(rows) { t in
                         TableRow(t)
@@ -836,6 +688,13 @@ struct TrackListView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .alternatingRowBackgrounds(.disabled)
+                .onChange(of: ui.tableSelection) { _, sel in
+                    // Én valgt sang vises i afspilleren (uden at afspille), så du kan zoome og rette griddet
+                    guard sel.count == 1, let id = sel.first, PlayerModel.shared.track?.id != id,
+                          !PlayerModel.shared.playing, let t = library.index.track(id) else { return }
+                    PlayerModel.shared.load(t, autoplay: false)
+                }
                 .background(RightClickArea { row, e in
                     guard let r = row, r < rows.count else { return false }
                     let id = rows[r].id
@@ -959,9 +818,46 @@ struct TrackListView: View {
 
 // MARK: - Celler (små, enkle visninger så tabellen er let for oversætteren)
 
+/// Lille waveform i tabellen: klik eller træk for at afspille fra dét sted (som i rekordbox).
 struct WaveCell: View {
     let track: LibTrack
-    var body: some View { MiniWave(track: track).frame(width: 96, height: 26) }
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                MiniWave(track: track)
+                MiniPlayhead(id: track.id, width: g.size.width)
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                let player = PlayerModel.shared
+                let f = Double(max(0, min(1, v.location.x / max(1, g.size.width))))
+                if player.track?.id != track.id {
+                    player.load(LibraryStore.shared.index.track(track.id) ?? track, autoplay: true)
+                } else if !player.playing {
+                    player.play()
+                }
+                player.seek(f)
+            })
+        }
+        .frame(width: 76, height: 26)
+    }
+}
+
+struct MiniPlayhead: View {
+    @ObservedObject private var player = PlayerModel.shared
+    let id: UUID
+    let width: CGFloat
+
+    var body: some View {
+        if player.track?.id == id, player.duration > 0 {
+            let x: CGFloat = width * CGFloat(player.position / player.duration)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.black.opacity(0.35)).frame(width: max(0, x))
+                Rectangle().fill(Color.white).frame(width: 1.5).offset(x: x - 0.75)
+            }
+            .allowsHitTesting(false)
+        }
+    }
 }
 
 struct ArtistCell: View {
@@ -993,16 +889,22 @@ struct KeyCell: View {
     let track: LibTrack
     var body: some View {
         if let k = track.key {
-            KeyPill(key: k)
+            HStack(spacing: 6) {
+                KeyPill(key: k)
+                Text(k.classic).font(.system(size: 12)).foregroundColor(Color.mist.opacity(0.6)).lineLimit(1)
+            }
         } else {
-            Text("–").foregroundColor(Color.mist.opacity(0.3))
+            Text("–").foregroundColor(Color.mist.opacity(0.4))
         }
     }
 }
 
 struct BPMCell: View {
     let track: LibTrack
-    var body: some View { Text(track.bpmText).monospacedDigit().foregroundColor(Color.mist) }
+    var body: some View {
+        Text(track.bpmText).monospacedDigit().foregroundColor(Color.mist)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
 }
 
 struct ClassicKeyCell: View {
@@ -1015,7 +917,10 @@ struct ClassicKeyCell: View {
 
 struct DurationCell: View {
     let track: LibTrack
-    var body: some View { Text(track.durationText).monospacedDigit().foregroundColor(Color.mist.opacity(0.7)) }
+    var body: some View {
+        Text(track.durationText).monospacedDigit().foregroundColor(Color.mist.opacity(0.7))
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
 }
 
 struct QualityCell: View {
@@ -1023,7 +928,7 @@ struct QualityCell: View {
     var body: some View {
         HStack(spacing: 6) {
             QualityText(track: track)
-            Text(track.codec).font(.system(size: 10)).foregroundColor(Color.mist.opacity(0.4))
+            Text(track.codec).font(.system(size: 11)).foregroundColor(Color.mist.opacity(0.5))
             LufsBadge(track: track)
         }
     }
@@ -1038,7 +943,7 @@ struct LufsBadge: View {
         if library.fixing.contains(track.id) {
             HStack(spacing: 3) {
                 ProgressView().controlSize(.mini)
-                Text("Retter").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember)
+                Text("Retter").font(.system(size: 11, weight: .semibold)).foregroundColor(Color.ember)
             }
         } else if let l = track.lufs {
             let target: Double = LoudnessPrefs.target
@@ -1049,7 +954,7 @@ struct LufsBadge: View {
                 if fixed { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
                 Text(String(format: "%.0f", l))
             }
-            .font(.system(size: 10, weight: .bold)).monospacedDigit()
+            .font(.system(size: 11, weight: .bold)).monospacedDigit()
             .foregroundColor(color)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(color.opacity(0.14)))

@@ -601,6 +601,46 @@ do {
     check("Lydstyrke-test kørte", false, error.localizedDescription)
 }
 
+// MARK: - Beatgrid, klippede toppe og waveform-farver
+print("\nBeatgrid og behandling")
+do {
+    // 120 BPM = 0,5 s pr. slag; første slag ved 0,25 s
+    let p1 = BeatGrid.position(at: 0.25, bpm: 120, firstBeat: 0.25)
+    check("Takt 1.1 ved første slag", p1.bar == 1 && p1.beat == 1, "\(p1)")
+    let p2 = BeatGrid.position(at: 0.25 + 0.5 * 5 + 0.01, bpm: 120, firstBeat: 0.25)
+    check("Slag 6 = takt 2.2", p2.bar == 2 && p2.beat == 2, "\(p2)")
+    let p3 = BeatGrid.position(at: 0.25 + 0.5 * 32 * 2 + 0.01, bpm: 120, firstBeat: 0.25)
+    check("Takt 17 starter en ny frase", p3.bar == 17 && p3.beat == 1 && p3.barsToPhrase == 8, "\(p3)")
+    let p4 = BeatGrid.position(at: 0.25 + 0.5 * 4 * 5 + 0.01, bpm: 120, firstBeat: 0.25)
+    check("Takt 6: frase om 3 takter", p4.bar == 6 && p4.barsToPhrase == 3, "\(p4)")
+    let neg = BeatGrid.position(at: 0.0, bpm: 120, firstBeat: 0.25)
+    check("Før første slag: takt 0.4", neg.bar == 0 && neg.beat == 4, "\(neg)")
+    check("Takt 1 her", abs(BeatGrid.downbeat(at: 10.3, bpm: 120) - 0.3) < 1e-9)
+
+    // Klippet sinus: toppene genskabes og bliver højere end klip-niveauet
+    let sr = 44100.0
+    var sine = [Float](repeating: 0, count: Int(sr))
+    for i in sine.indices { sine[i] = Float(1.6 * sin(2 * .pi * 100 * Double(i) / sr)) }
+    var clipped = [sine.map { max(-1, min(1, $0)) }]
+    let clips = Loudness.countClips(clipped)
+    check("Klippede toppe tælles", clips >= 150, "\(clips)")
+    let fixedRuns = Loudness.declip(&clipped)
+    check("Klippede toppe rettes", fixedRuns >= 150, "\(fixedRuns)")
+    var peak: Float = 0
+    for v in clipped[0] { peak = max(peak, abs(v)) }
+    check("Toppene genskabes over klip-niveauet", peak > 1.2, String(format: "%.2f", peak))
+    let env = Loudness.envelope([sine.map { max(-1, min(1, $0)) }])
+    check("Før-billede markerer klip", env.clips.filter { $0 }.count > 100 && env.peaks.count == 600)
+    check("Overblik kan gemmes og læses", LoudnessEnvelope(data: env.data) == env)
+
+    // Waveform-farver: fuldt mix = laks, kun bas = rød, kun mellem = grøn
+    if let c = WaveColor.rgb(255, 128, 102) {
+        check("Fuldt mix bliver laksefarvet", abs(c.r - 1) < 1e-9 && c.g > 0.6 && c.g < 0.75 && c.b < c.g, "\(c)")
+    }
+    if let c = WaveColor.rgb(0, 255, 0) { check("Mellem alene er grøn", abs(c.g - 1) < 1e-9 && c.r < 0.4) }
+    check("Stilhed giver ingen farve", WaveColor.rgb(0, 0, 0) == nil)
+}
+
 try? FileManager.default.removeItem(at: tmp)
 print("\n\(passed) bestået, \(failed) fejlet")
 exit(failed == 0 ? 0 : 1)

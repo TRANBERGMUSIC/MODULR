@@ -221,9 +221,8 @@ struct MenuCard: View {
         case .divider:
             MenuDivider()
         case .header:
-            Text(item.title.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .tracking(1.6)
+            Text(item.title)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(Color.mist.opacity(0.35))
                 .padding(.horizontal, 10)
                 .padding(.top, 6)
@@ -262,8 +261,8 @@ struct SubEntry: View {
         case .divider:
             MenuDivider()
         case .header:
-            Text(item.title.uppercased())
-                .font(.system(size: 9, weight: .bold)).tracking(1.6)
+            Text(item.title)
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(Color.mist.opacity(0.35))
                 .padding(.horizontal, 10).padding(.top, 5).padding(.bottom, 2)
         case .action(let run):
@@ -355,15 +354,11 @@ struct MenuDivider: View {
 
 struct MenuCardBackground: View {
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         shape
-            .fill(LinearGradient(colors: [Color(white: 0.135), Color(white: 0.085)], startPoint: .top, endPoint: .bottom))
-            .overlay(
-                shape.stroke(LinearGradient(colors: [Color.ember.opacity(0.6), Color.white.opacity(0.08), Color.white.opacity(0.04)],
-                                            startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.6), radius: 14, y: 6)
-            .shadow(color: Color.ember.opacity(0.14), radius: 16)
+            .fill(Color(white: 0.11))
+            .overlay(shape.stroke(Color.white.opacity(0.1), lineWidth: 1))
+            .shadow(color: Color.black.opacity(0.55), radius: 16, y: 8)
     }
 }
 
@@ -622,14 +617,12 @@ struct DangerButtonStyle: ButtonStyle {
 extension View {
     /// Kortet bag en dialog: mørk flade, ember-kant og dyb skygge.
     func dialogCard() -> some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         return self
-            .background(shape.fill(LinearGradient(colors: [Color(white: 0.13), Color(white: 0.08)], startPoint: .top, endPoint: .bottom)))
+            .background(shape.fill(Color(white: 0.11)))
             .clipShape(shape)
-            .overlay(shape.stroke(LinearGradient(colors: [Color.ember.opacity(0.55), Color.white.opacity(0.07)],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+            .overlay(shape.stroke(Color.white.opacity(0.1), lineWidth: 1))
             .shadow(color: Color.black.opacity(0.6), radius: 30, y: 12)
-            .shadow(color: Color.ember.opacity(0.12), radius: 24)
     }
 }
 

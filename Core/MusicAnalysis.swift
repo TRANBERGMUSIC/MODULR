@@ -326,49 +326,81 @@ enum MusicAnalyzer {
         var brightness: Double
     }
 
-    /// 3 bånd pr. kolonne (lav < 250 Hz, mellem 250–2500 Hz, høj > 2500 Hz), 150 kolonner/s.
+    /// 3 bånd pr. kolonne som rekordbox' RGB-waveform: lav < 200 Hz, mellem 200–2500 Hz, høj > 2500 Hz
+    /// (4. ordens filtre), RMS i 150 kolonner/s. Hvert bånd normaliseres mod sit eget 95-percentil og
+    /// vægtes 1 : 0,5 : 0,4, så et fuldt klub-mix bliver laksefarvet, breaks grønne og hi-hats blå.
     static func waveformBands(_ x: [Float], sr: Double) -> ([UInt8], BandStats) {
-        let n = 512
         let hop = max(1, Int((sr / waveformRate).rounded()))
-        let fft = FFT(n: n)
-        let half = n / 2
-        let cols = max(1, (x.count - n) / hop + 1)
-        let binHz = sr / Double(n)
-        let lowEnd = max(1, Int(250 / binHz)), midEnd = max(lowEnd + 1, Int(2500 / binHz))
-        var power = [Float](repeating: 0, count: half)
+        let cols = max(1, x.count / hop)
+        let low = biquadCascade(x, sections: [rbj(lowpass: true, f0: 200, sr: sr), rbj(lowpass: true, f0: 200, sr: sr)])
+        let mid = biquadCascade(x, sections: [rbj(lowpass: false, f0: 200, sr: sr), rbj(lowpass: false, f0: 200, sr: sr),
+                                              rbj(lowpass: true, f0: 2500, sr: sr), rbj(lowpass: true, f0: 2500, sr: sr)])
+        let high = biquadCascade(x, sections: [rbj(lowpass: false, f0: 2500, sr: sr), rbj(lowpass: false, f0: 2500, sr: sr)])
         var raw = [Float](repeating: 0, count: cols * 3)
         var sumHigh = 0.0, sumAll = 0.0
-        for c in 0..<cols {
-            let start = min(c * hop, x.count - n)
-            fft.power(x, start: max(0, start), into: &power)
-            var lo: Float = 0, mi: Float = 0, hi: Float = 0
-            for k in 1..<half {
-                if k < lowEnd { lo += power[k] } else if k < midEnd { mi += power[k] } else { hi += power[k] }
+        let signals = [low, mid, high]
+        for band in 0..<3 {
+            signals[band].withUnsafeBufferPointer { p in
+                for c in 0..<cols {
+                    let start = c * hop
+                    let n = min(hop, p.count - start)
+                    guard n > 0 else { continue }
+                    var ms: Float = 0
+                    vDSP_measqv(p.baseAddress! + start, 1, &ms, vDSP_Length(n))
+                    raw[c * 3 + band] = sqrtf(ms)
+                    sumAll += Double(ms)
+                    if band == 2 { sumHigh += Double(ms) }
+                }
             }
-            raw[c * 3] = sqrtf(lo)
-            raw[c * 3 + 1] = sqrtf(mi)
-            raw[c * 3 + 2] = sqrtf(hi)
-            sumHigh += Double(hi)
-            sumAll += Double(lo + mi + hi)
         }
-        // Båndene vejes mod hinanden (diskant har naturligt mindre energi) og normaliseres samlet,
-        // så forholdet mellem bas/mellem/diskant bevares – det giver rekordbox' RGB-farver.
-        let weights: [Float] = [1.0, 1.8, 3.2]
+        // Per-bånd reference (95-percentil), med gulv så et næsten tomt bånd ikke forstærkes til støj
+        var refs = [Float](repeating: 1, count: 3)
+        for band in 0..<3 {
+            var v = [Float](repeating: 0, count: cols)
+            for c in 0..<cols { v[c] = raw[c * 3 + band] }
+            v.sort()
+            refs[band] = v[min(cols - 1, Int(Double(cols) * 0.95))]
+        }
+        let floorRef: Float = max(1e-6, refs.max()! * 0.08)
+        let weights: [Float] = [1.0, 0.5, 0.4]
         var tops = [Float](repeating: 0, count: cols)
         for c in 0..<cols {
-            for band in 0..<3 { raw[c * 3 + band] *= weights[band] }
-            tops[c] = max(raw[c * 3], max(raw[c * 3 + 1], raw[c * 3 + 2]))
+            var top: Float = 0
+            for band in 0..<3 {
+                let v = raw[c * 3 + band] / max(refs[band], floorRef) * weights[band]
+                raw[c * 3 + band] = v
+                top = max(top, v)
+            }
+            tops[c] = top
         }
         var sortedTops = tops
         sortedTops.sort()
-        let refIndex: Int = min(sortedTops.count - 1, Int(Double(sortedTops.count) * 0.995))
-        let ref: Float = max(1e-6, sortedTops[refIndex])
+        let ref: Float = max(1e-6, sortedTops[min(cols - 1, Int(Double(cols) * 0.995))])
         var out = [UInt8](repeating: 0, count: cols * 3)
         for i in 0..<(cols * 3) {
-            let v: Float = min(1, raw[i] / ref)
-            out[i] = UInt8((v * 255).rounded())
+            out[i] = UInt8((min(1, raw[i] / ref) * 255).rounded())
         }
         return (out, BandStats(brightness: sumAll > 0 ? sumHigh / sumAll : 0))
+    }
+
+    /// RBJ-biquad (Q = 0,707) som vDSP-koefficienter [b0, b1, b2, a1, a2].
+    static func rbj(lowpass: Bool, f0: Double, sr: Double) -> [Double] {
+        let w = 2 * Double.pi * f0 / sr
+        let alpha = sin(w) / (2 * 0.7071)
+        let c = cos(w)
+        let a0 = 1 + alpha
+        let b: [Double] = lowpass ? [(1 - c) / 2, 1 - c, (1 - c) / 2] : [(1 + c) / 2, -(1 + c), (1 + c) / 2]
+        return [b[0] / a0, b[1] / a0, b[2] / a0, (-2 * c) / a0, (1 - alpha) / a0]
+    }
+
+    static func biquadCascade(_ x: [Float], sections: [[Double]]) -> [Float] {
+        let coeffs: [Double] = sections.flatMap { $0 }
+        guard let setup = vDSP_biquad_CreateSetup(coeffs, vDSP_Length(sections.count)) else { return x }
+        defer { vDSP_biquad_DestroySetup(setup) }
+        var delay = [Float](repeating: 0, count: 2 * sections.count + 2)
+        var y = [Float](repeating: 0, count: x.count)
+        vDSP_biquad(setup, &delay, x, 1, &y, 1, vDSP_Length(x.count))
+        return y
     }
 
     // MARK: Energi

@@ -29,7 +29,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var artFile: String?          // cover (JPEG)
     var hasWave: Bool
     var waveVersion: Int?
-    static let currentWaveVersion = 2
+    static let currentWaveVersion = 3
     var addedAt: Date
     var analyzed: Bool
     var analysisError: String?
@@ -41,6 +41,12 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var loudnessNote: String?
     var originalBackup: String?   // originalen før lydstyrken blev rettet
     var loudnessSkip: Bool?       // du har gendannet originalen – rør den ikke igen
+    var gridEdited: Bool?         // du har rettet griddet – analysen må ikke overskrive det
+    var eqApplied: [Double]?      // EQ gemt i filen (bas, mellem, diskant i dB)
+    var lufsBefore: Double?       // lydstyrke før behandling
+    var clipsRepaired: Int?
+    var limitingDB: Double?
+    var cues: [Double]?           // dine markeringer (sekunder) til at planlægge sættet
 
     var url: URL { URL(fileURLWithPath: path) }
     var fileName: String { url.lastPathComponent }
@@ -80,6 +86,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
         loudnessNote = nil
         originalBackup = nil
         loudnessSkip = nil
+        eqApplied = nil
     }
 
     var lufsText: String {
@@ -221,5 +228,69 @@ struct LibraryIndex: Codable, Equatable {
 
     func nextSort(under parent: UUID?) -> Int {
         (nodes.filter { $0.parent == parent }.map(\.sort).max() ?? -1) + 1
+    }
+}
+
+/// Farven på en waveform-kolonne som i rekordbox (RGB): bas = rød, mellem = grøn, diskant = blå,
+/// blandet additivt og lysnet en smule, så et fuldt mix bliver laksefarvet.
+enum WaveColor {
+    static let floor = 0.35
+
+    static func rgb(_ lo: Double, _ mi: Double, _ hi: Double) -> (r: Double, g: Double, b: Double)? {
+        let top = max(lo, max(mi, hi))
+        guard top > 0 else { return nil }
+        return (floor + (1 - floor) * lo / top, floor + (1 - floor) * mi / top, floor + (1 - floor) * hi / top)
+    }
+
+    /// Kolonne `a..<b` af båndene (3 bytes pr. kolonne): blød top (gennemsnit + maksimum) og farve.
+    static func column(_ bands: [UInt8], _ a: Int, _ b: Int) -> (height: Double, r: Double, g: Double, b: Double)? {
+        let cols = bands.count / 3
+        let lo0 = max(0, a), hi0 = min(cols, max(lo0 + 1, b))
+        guard lo0 < cols else { return nil }
+        var mx: [Double] = [0, 0, 0]
+        var sum: [Double] = [0, 0, 0]
+        for c in lo0..<hi0 {
+            for k in 0..<3 {
+                let v = Double(bands[c * 3 + k])
+                if v > mx[k] { mx[k] = v }
+                sum[k] += v
+            }
+        }
+        let n = Double(hi0 - lo0)
+        var v: [Double] = [0, 0, 0]
+        for k in 0..<3 { v[k] = 0.6 * (sum[k] / n) + 0.4 * mx[k] }
+        guard let c = rgb(v[0], v[1], v[2]) else { return nil }
+        return (max(v[0], max(v[1], v[2])) / 255, c.r, c.g, c.b)
+    }
+}
+
+/// Takt og slag ud fra BPM og første slag: 4 slag pr. takt, 8 takter pr. frase.
+enum BeatGrid {
+    static let beatsPerBar = 4
+    static let barsPerPhrase = 8
+
+    static func beatIndex(at t: Double, bpm: Double, firstBeat: Double) -> Int {
+        guard bpm > 0 else { return 0 }
+        return Int(floor((t - firstBeat) / (60 / bpm) + 1e-6))
+    }
+
+    static func mod(_ a: Int, _ n: Int) -> Int { ((a % n) + n) % n }
+
+    /// "17.3": takt 17, slag 3 (1-baseret, som på en CDJ).
+    static func position(at t: Double, bpm: Double, firstBeat: Double) -> (bar: Int, beat: Int, barsToPhrase: Int, beatsToPhrase: Int) {
+        let i = beatIndex(at: t, bpm: bpm, firstBeat: firstBeat)
+        let bar = Int(floor(Double(i) / Double(beatsPerBar))) + 1
+        let beat = mod(i, beatsPerBar) + 1
+        let phraseBeats = beatsPerBar * barsPerPhrase
+        let beatsLeft = phraseBeats - mod(i, phraseBeats)
+        let barsLeft = Int(ceil(Double(beatsLeft) / Double(beatsPerBar)))
+        return (bar, beat, barsLeft, beatsLeft)
+    }
+
+    /// Første slag flyttet, så takt 1 starter ved `t` (bevarer BPM).
+    static func downbeat(at t: Double, bpm: Double) -> Double {
+        guard bpm > 0 else { return t }
+        let bar = 60 / bpm * Double(beatsPerBar)
+        return t - floor(t / bar) * bar
     }
 }

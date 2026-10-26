@@ -19,6 +19,28 @@ struct LoudnessFixResult: Equatable {
     var gainDB: Double
     var limitingDB: Double
     var note: String
+    var clipsRepaired: Int = 0
+}
+
+/// Overblik over en fil til før/efter-visningen: top pr. kolonne (0–255) og om kolonnen har klippede toppe.
+struct LoudnessEnvelope: Codable, Equatable {
+    var peaks: [UInt8]
+    var clips: [Bool]
+
+    var data: Data { Data(peaks + clips.map { $0 ? 1 : 0 }) }
+
+    init(peaks: [UInt8], clips: [Bool]) {
+        self.peaks = peaks
+        self.clips = clips
+    }
+
+    init?(data: Data) {
+        let b = [UInt8](data)
+        guard b.count >= 2, b.count % 2 == 0 else { return nil }
+        let n = b.count / 2
+        peaks = Array(b[0..<n])
+        clips = b[n...].map { $0 != 0 }
+    }
 }
 
 enum LoudnessError: LocalizedError {
@@ -136,6 +158,99 @@ enum Loudness {
         return LoudnessMeasurement(lufs: integratedLUFS(ch, sr: sr), peakDB: peakDB(ch))
     }
 
+    // MARK: Klippede toppe
+
+    /// Niveauet en fil er klippet ved (højeste top), hvis toppen ligger over −1 dBFS.
+    static func clipLevel(_ channels: [[Float]]) -> Float? {
+        var m: Float = 0
+        for ch in channels {
+            var v: Float = 0
+            vDSP_maxmgv(ch, 1, &v, vDSP_Length(ch.count))
+            m = max(m, v)
+        }
+        return m >= 0.89 ? m * 0.999 : nil
+    }
+
+    /// Antal klippede toppe: mindst 2 samples i træk på klip-niveauet.
+    static func countClips(_ channels: [[Float]]) -> Int {
+        guard let thr = clipLevel(channels) else { return 0 }
+        var runs = 0
+        for ch in channels {
+            var len = 0
+            for v in ch {
+                if abs(v) >= thr { len += 1 } else {
+                    if len >= 2 { runs += 1 }
+                    len = 0
+                }
+            }
+            if len >= 2 { runs += 1 }
+        }
+        return runs
+    }
+
+    /// Genskaber klippede toppe (kubisk kurve hen over det flade stykke, som før det blev klippet).
+    /// Toppen bliver højere end før – gain og limiter tager sig af det bagefter. Returnerer antal rettede.
+    static func declip(_ channels: inout [[Float]]) -> Int {
+        guard let thr = clipLevel(channels) else { return 0 }
+        var fixed = 0
+        for c in channels.indices {
+            var x = channels[c]
+            let n = x.count
+            var i = 2
+            while i < n - 2 {
+                guard abs(x[i]) >= thr else { i += 1; continue }
+                let sign: Float = x[i] >= 0 ? 1 : -1
+                var b = i
+                while b + 1 < n && abs(x[b + 1]) >= thr && (x[b + 1] >= 0 ? 1 : -1) == sign { b += 1 }
+                let a = i
+                if b > a, b - a < 400, a >= 2, b + 2 < n {
+                    let p0 = x[a - 1], p1 = x[b + 1]
+                    let m0 = x[a - 1] - x[a - 2], m1 = x[b + 2] - x[b + 1]
+                    let len = Float(b - a + 2)
+                    for k in a...b {
+                        let t = Float(k - (a - 1)) / len
+                        let t2 = t * t, t3 = t2 * t
+                        let h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t
+                        let h01 = -2 * t3 + 3 * t2, h11 = t3 - t2
+                        let v = h00 * p0 + h10 * len * m0 + h01 * p1 + h11 * len * m1
+                        x[k] = sign * max(abs(v), thr)
+                    }
+                    fixed += 1
+                }
+                i = b + 1
+            }
+            channels[c] = x
+        }
+        return fixed
+    }
+
+    /// Overblik til før/efter-visningen (som Platinum Notes): 600 kolonner.
+    static func envelope(_ channels: [[Float]], columns: Int = 600) -> LoudnessEnvelope {
+        let n = channels.first?.count ?? 0
+        guard n > 0 else { return LoudnessEnvelope(peaks: [], clips: []) }
+        let thr = clipLevel(channels) ?? 2
+        var peaks = [UInt8](repeating: 0, count: columns)
+        var clips = [Bool](repeating: false, count: columns)
+        for col in 0..<columns {
+            let a = col * n / columns
+            let b = max(a + 1, (col + 1) * n / columns)
+            var m: Float = 0
+            var run = 0
+            var clipped = false
+            for ch in channels {
+                run = 0
+                for i in a..<min(b, n) {
+                    let v = abs(ch[i])
+                    if v > m { m = v }
+                    if v >= thr { run += 1; if run >= 2 { clipped = true } } else { run = 0 }
+                }
+            }
+            peaks[col] = UInt8(min(255, (min(m, 1) * 255).rounded()))
+            clips[col] = clipped
+        }
+        return LoudnessEnvelope(peaks: peaks, clips: clips)
+    }
+
     // MARK: Limiter
 
     /// Gain + look-ahead-limiter (5 ms frem, 120 ms slip). Returnerer de nye kanaler og den største dæmpning (dB).
@@ -207,8 +322,11 @@ enum Loudness {
     }
 
     /// Finder den gain der rammer målet, uden mere limiting end `maxLimitingDB`.
-    static func normalizePCM(_ channels: [[Float]], sr: Double, target: Double, maxLimitingDB: Double) -> ([[Float]], LoudnessFixResult) {
-        let before = integratedLUFS(channels, sr: sr)
+    static func normalizePCM(_ input: [[Float]], sr: Double, target: Double, maxLimitingDB: Double,
+                             repairClips: Bool = true) -> ([[Float]], LoudnessFixResult) {
+        let before = integratedLUFS(input, sr: sr)
+        var channels = input
+        let repaired = repairClips ? declip(&channels) : 0
         var gain = target - before
         var best = channels
         var got = false
@@ -235,8 +353,10 @@ enum Loudness {
             after = integratedLUFS(y, sr: sr)
         }
         var note = String(format: "%.1f → %.1f LUFS", before, after)
+        if repaired > 0 { note += " · \(repaired) klippede toppe rettet" }
         if after < target - 0.5 { note += String(format: " (holdt %.0f dB under målet for ikke at maste lyden)", target - after) }
-        return (best, LoudnessFixResult(before: before, after: after, gainDB: gain, limitingDB: limiting, note: note))
+        return (best, LoudnessFixResult(before: before, after: after, gainDB: gain, limitingDB: limiting, note: note,
+                                        clipsRepaired: repaired))
     }
 
     // MARK: Skrivning (WAV/AIFF)
