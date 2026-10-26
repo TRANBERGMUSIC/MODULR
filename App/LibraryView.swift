@@ -1399,78 +1399,148 @@ struct UsbSettingsView: View {
     let drive: UsbDrive
     let close: () -> Void
     @State private var draft: [String: [String: Int]] = [:]
+    @State private var tab = "DEVSETTING.DAT"
 
     init(drive: UsbDrive, close: @escaping () -> Void) {
         self.drive = drive
         self.close = close
     }
 
+    static let tabs: [(String, String)] = [("DEVSETTING.DAT", "Visning"), ("MYSETTING.DAT", "CDJ"),
+                                           ("MYSETTING2.DAT", "CDJ 2"), ("DJMMYSETTING.DAT", "Mixer")]
+    static let tabInfo = ["DEVSETTING.DAT": "Hvordan CDJ'en tegner waveform og toneart, når stikket er sat i.",
+                          "MYSETTING.DAT": "Spillerens My Settings – hentes når du loader stikket på CDJ'en.",
+                          "MYSETTING2.DAT": "Flere spillerindstillinger (jog-skærm, waveform, beat jump).",
+                          "DJMMYSETTING.DAT": "Mixerens indstillinger – hentes af DJM'en via PRO DJ LINK."]
+
     var body: some View {
         let st = usb.settings[drive.id]
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Image(systemName: "slider.horizontal.3").foregroundStyle(Color.emberGradient)
-                Text("MY SETTINGS · \(drive.name.uppercased())").font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundColor(.mist)
-                Spacer()
-                Button("Luk") { close() }
-                Button("Gem på USB") {
-                    usb.writeSettings(drive, changes(st))
-                    close()
-                }
-                .buttonStyle(.ember)
-                .disabled(changes(st).isEmpty)
-            }
-            .padding(16)
-            Text("CDJ'en og mixeren henter disse indstillinger fra stikket. De gamle filer gemmes som backup i PIONEER/MODULR-settings-backup.")
-                .font(.system(size: 11)).foregroundColor(.mist.opacity(0.5)).padding(.horizontal, 16).padding(.bottom, 8)
+        let changed = changes(st)
+        VStack(spacing: 0) {
+            header
+            ModSegmented(selection: $tab, options: Self.tabs)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 14)
+            Rectangle().fill(Color.hairline).frame(height: 1)
             if let st {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(UsbSettings.fileOrder, id: \.self) { file in
-                            section(file, st)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(Self.tabInfo[tab] ?? "")
+                            .font(.system(size: 12)).foregroundColor(.mist.opacity(0.5))
+                        notices(st)
+                        if tab == "DEVSETTING.DAT", let wf = st.fields.first(where: { $0.file == tab && $0.name == "waveform_color" }) {
+                            WaveformColorPicker(selection: binding(wf, st), changed: isChanged(wf, st))
                         }
+                        card(st)
                     }
-                    .padding(16)
+                    .padding(22)
                 }
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Læser indstillingerne på stikket …").font(.system(size: 12)).foregroundColor(.mist.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            Rectangle().fill(Color.hairline).frame(height: 1)
+            footer(changed)
         }
-        .frame(width: 560, height: 620)
+        .frame(width: 600, height: 640)
         .background(Color.graphite)
         .onAppear { usb.loadSettings(drive) }
     }
 
-    func section(_ file: String, _ st: UsbSettings) -> some View {
-        let fields = st.fields.filter { $0.file == file }
-        return VStack(alignment: .leading, spacing: 6) {
-            Text((UsbSettings.fileTitle[file] ?? file).uppercased())
-                .font(.system(size: 11, weight: .bold)).tracking(1.2).foregroundColor(.ember)
-            if st.missing.contains(file) {
-                Text("Filen findes ikke på USB'en – gemmer du, laves den med rekordbox' standardværdier.")
-                    .font(.system(size: 11)).foregroundColor(.mist.opacity(0.5))
-            }
-            if let p = st.problems[file] {
-                Text("⚠︎ \(p)").font(.system(size: 11)).foregroundColor(.amber)
-            }
-            ForEach(fields) { f in
-                HStack {
-                    Text(f.label).font(.system(size: 12)).foregroundColor(.mist.opacity(0.85))
-                    Spacer()
-                    Picker("", selection: binding(f, st)) {
-                        ForEach(f.options) { o in Text(o.label).tag(o.value) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 200)
-                    .disabled(st.problems[file] != nil)
+    var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.ember)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.ember.opacity(0.12)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("My Settings").font(.system(size: 17, weight: .bold)).foregroundColor(.mist)
+                HStack(spacing: 5) {
+                    Image(systemName: "externaldrive.fill").font(.system(size: 9))
+                    Text(drive.name).lineLimit(1)
                 }
+                .font(.system(size: 11, weight: .medium)).foregroundColor(.mist.opacity(0.45))
+            }
+            Spacer()
+            Button { close() } label: {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundColor(.mist.opacity(0.6))
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color.white.opacity(0.06)))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 20)
+        .padding(.bottom, 16)
+    }
+
+    @ViewBuilder
+    func notices(_ st: UsbSettings) -> some View {
+        if st.missing.contains(tab) {
+            Label("Filen findes ikke på stikket. Gemmer du, laves den med rekordbox' standardværdier.", systemImage: "info.circle")
+                .font(.system(size: 12)).foregroundColor(.mist.opacity(0.7))
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.04)))
+        }
+        if let p = st.problems[tab] {
+            Label(p, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12)).foregroundColor(.amber)
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.amber.opacity(0.08)))
+        }
+    }
+
+    func card(_ st: UsbSettings) -> some View {
+        let fields = st.fields.filter { $0.file == tab && !($0.file == "DEVSETTING.DAT" && $0.name == "waveform_color") }
+        return VStack(spacing: 0) {
+            ForEach(Array(fields.enumerated()), id: \.element.id) { i, f in
+                if i > 0 { Rectangle().fill(Color.hairline).frame(height: 1).padding(.leading, 16) }
+                SettingRow(field: f, value: binding(f, st), changed: isChanged(f, st))
+                    .disabled(st.problems[tab] != nil)
             }
         }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.035)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.hairline, lineWidth: 1))
+    }
+
+    func footer(_ changed: [String: [String: Int]]) -> some View {
+        let n = changed.values.reduce(0) { $0 + $1.count }
+        return HStack(spacing: 10) {
+            if n > 0 {
+                Circle().fill(Color.ember).frame(width: 6, height: 6)
+                Text("\(n) ændring\(n == 1 ? "" : "er")").font(.system(size: 12, weight: .semibold)).foregroundColor(.mist.opacity(0.8))
+                Button("Fortryd") { draft = [:] }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(.mist.opacity(0.5))
+            } else {
+                Image(systemName: "lock.shield").font(.system(size: 11)).foregroundColor(.mist.opacity(0.35))
+                Text("Backup af de gamle filer gemmes på stikket").font(.system(size: 11)).foregroundColor(.mist.opacity(0.35))
+            }
+            Spacer()
+            Button("Gem på USB") {
+                usb.writeSettings(drive, changed)
+                close()
+            }
+            .buttonStyle(.ember)
+            .disabled(n == 0)
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
     }
 
     func binding(_ f: UsbSettingField, _ st: UsbSettings) -> Binding<Int> {
         Binding(get: { draft[f.file]?[f.name] ?? st.value(f) ?? f.defaultValue },
                 set: { draft[f.file, default: [:]][f.name] = $0 })
+    }
+
+    func isChanged(_ f: UsbSettingField, _ st: UsbSettings) -> Bool {
+        guard let v = draft[f.file]?[f.name] else { return false }
+        return v != st.value(f) || st.missing.contains(f.file)
     }
 
     /// Kun de felter du faktisk har ændret (og filer der mangler, hvis du har valgt noget i dem).
@@ -1484,6 +1554,132 @@ struct UsbSettingsView: View {
             }
         }
         return out
+    }
+}
+
+/// Én række: navn til venstre, værdien som en pille der åbner MODULRs egen menu.
+struct SettingRow: View {
+    let field: UsbSettingField
+    @Binding var value: Int
+    let changed: Bool
+    @State private var hover = false
+
+    init(field: UsbSettingField, value: Binding<Int>, changed: Bool) {
+        self.field = field
+        _value = value
+        self.changed = changed
+    }
+
+    static func display(_ s: String) -> String { s.uppercased() }
+
+    var body: some View {
+        let current = field.options.first { $0.value == value }?.label ?? "—"
+        HStack(spacing: 10) {
+            Circle().fill(Color.ember).frame(width: 6, height: 6).opacity(changed ? 1 : 0)
+            Text(field.label).font(.system(size: 13)).foregroundColor(.mist.opacity(0.9)).lineLimit(1)
+            Spacer(minLength: 12)
+            ModMenuButton(items: {
+                field.options.map { o in
+                    MMItem.action(Self.display(o.label), icon: o.value == value ? "checkmark" : nil) { value = o.value }
+                }
+            }) {
+                HStack(spacing: 8) {
+                    Text(Self.display(current))
+                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .foregroundColor(changed ? .ember : .mist)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.4))
+                }
+                .padding(.horizontal, 12)
+                .frame(width: 168, height: 28)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(hover ? 0.09 : 0.055)))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(changed ? Color.ember.opacity(0.5) : Color.hairline, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .onHover { hover = $0 }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 12)
+        .frame(height: 46)
+    }
+}
+
+/// Waveform-farven som tre små forhåndsvisninger – som valget på CDJ'en.
+struct WaveformColorPicker: View {
+    @Binding var selection: Int
+    let changed: Bool
+
+    init(selection: Binding<Int>, changed: Bool) {
+        _selection = selection
+        self.changed = changed
+    }
+
+    static let choices: [(Int, String)] = [(1, "Blå"), (3, "RGB"), (4, "3-bånd")]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("WAVEFORM-FARVE").font(.system(size: 11, weight: .bold)).tracking(1.2).foregroundColor(.mist.opacity(0.55))
+                if changed { Circle().fill(Color.ember).frame(width: 6, height: 6) }
+            }
+            HStack(spacing: 10) {
+                ForEach(Self.choices, id: \.0) { v, name in
+                    let on = selection == v
+                    Button { selection = v } label: {
+                        VStack(spacing: 8) {
+                            WaveSwatch(style: v)
+                                .frame(height: 38)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 10)
+                            Text(name).font(.system(size: 12, weight: .semibold)).foregroundColor(on ? .mist : .mist.opacity(0.6))
+                                .padding(.bottom, 9)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.black.opacity(0.35)))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .stroke(on ? Color.ember : Color.hairline, lineWidth: on ? 2 : 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+/// Lille waveform-prøve i spillerens farver.
+struct WaveSwatch: View {
+    let style: Int
+
+    var body: some View {
+        Canvas { ctx, size in
+            let n = 28
+            let w = size.width / CGFloat(n)
+            let mid = size.height / 2
+            for i in 0..<n {
+                let t = Double(i)
+                let lo = 0.35 + 0.6 * abs(sin(t * 0.55))
+                let mi = 0.25 + 0.5 * abs(sin(t * 0.9 + 1))
+                let hi = 0.15 + 0.4 * abs(sin(t * 1.7 + 2))
+                let x = CGFloat(i) * w + w * 0.15
+                let bw = w * 0.7
+                var bars: [(Double, Color)] = []
+                switch style {
+                case 3:
+                    let top = max(lo, mi, hi)
+                    bars = [(top, Color(red: 0.25 + 0.75 * lo / top, green: 0.2 + 0.8 * mi / top, blue: 0.3 + 0.7 * hi / top))]
+                case 4:
+                    bars = [(lo, Color(red: 0.10, green: 0.24, blue: 0.72)), (mi * 0.8, Color(red: 0.94, green: 0.63, blue: 0.13)), (hi * 0.6, .white)]
+                default:
+                    bars = [(max(lo, mi), Color(red: 0.05, green: 0.43, blue: 0.78)), (hi * 0.7, Color(red: 0.55, green: 0.78, blue: 1))]
+                }
+                for (h, c) in bars {
+                    let hh = CGFloat(h) * mid
+                    ctx.fill(Path(roundedRect: CGRect(x: x, y: mid - hh, width: bw, height: hh * 2), cornerRadius: bw / 2), with: .color(c))
+                }
+            }
+        }
     }
 }
 
