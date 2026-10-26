@@ -388,6 +388,11 @@ do {
     check("Fake 320 vises", t.qualityText == "Fake 320 → 128" && t.needsUpgrade, t.qualityText)
     t.tierKbps = 320
     check("Ægte 320 vises", t.qualityText == "320 kbps" && !t.needsUpgrade, t.qualityText)
+    t.tierKbps = 256
+    check("256 kbps er godt nok (ikke Dårlig kvalitet)", !t.needsUpgrade)
+    t.tierKbps = 192
+    check("192 kbps er Dårlig kvalitet", t.needsUpgrade)
+    t.tierKbps = 320
     var idx = LibraryIndex()
     var f = LibNode(name: "Fredag", parent: nil, isFolder: true, sort: 0)
     var p1 = LibNode(name: "Warm-up", parent: f.id, isFolder: false, sort: 0)
@@ -576,6 +581,16 @@ do {
     let loud = ch.map { $0.map { $0 * 3.5 } }
     let (_, down) = Loudness.normalizePCM(loud, sr: sr, target: -14, maxLimitingDB: 5)
     check("For høj sang skrues ned til målet", abs(down.after - -14) < 0.3, down.note)
+
+    // Hårdt mastret (fladt) signal: ekspansionen giver slaget tilbage
+    let squashed = ch.map { c in c.map { Float(tanh(Double($0) * 24) / tanh(24) * 0.98) } }
+    let plrBefore = Loudness.peakDB(squashed) - Loudness.integratedLUFS(squashed, sr: sr)
+    let (expandedCh, expDB) = Loudness.expandTransients(squashed, sr: sr, plr: plrBefore)
+    let plrAfter = Loudness.peakDB(expandedCh) - Loudness.integratedLUFS(expandedCh, sr: sr)
+    check("Ekspansion: fladt master får mere slag", plrAfter > plrBefore + 1.5 && expDB <= 6.01,
+          String(format: "PLR %.1f → %.1f dB, løft %.1f dB", plrBefore, plrAfter, expDB))
+    let (_, squashRes) = Loudness.normalizePCM(squashed, sr: sr, target: -10, maxLimitingDB: 5)
+    check("Normalisering bruger ekspansion på flade sange", squashRes.expandedDB > 0.5, squashRes.note)
 
     // 24-bit WAV kan læses igen
     let wav = tmp.appendingPathComponent("loud.wav")

@@ -68,7 +68,7 @@ struct SettingsView: View {
 /// Lydstyrke som Platinum Notes: alle sange rettes til samme niveau, så gain-knappen kan blive i midten.
 struct LoudnessSettingsView: View {
     @AppStorage(LoudnessPrefs.autoKey) private var autoFix = true
-    @AppStorage(LoudnessPrefs.targetKey) private var target = -9.0
+    @AppStorage(LoudnessPrefs.targetKey) private var target = -10.0
 
     var body: some View {
         Form {
@@ -77,7 +77,7 @@ struct LoudnessSettingsView: View {
                 Slider(value: $target, in: -12 ... -6, step: 0.5) {
                     Text("Mål: \(String(format: "%.1f", target)) LUFS")
                 }
-                Text("−9 LUFS passer til store klubanlæg og moderne klubmusik – så står gain-knappen samme sted på hver sang. Højere end −8 begynder at maste lyden.")
+                Text("−10 LUFS: samme niveau på alle sange, så gain-knappen står samme sted – med luft nok til at hårdt mastrede sange kan få slaget tilbage (dynamik-ekspansion som Platinum Notes).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

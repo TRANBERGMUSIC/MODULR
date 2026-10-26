@@ -361,6 +361,7 @@ final class LibraryStore: ObservableObject {
         var status: Status
         var clips: Int?
         var limitingDB: Double?
+        var expandedDB: Double?
         var before: Double?
         var after: Double?
         var note: String
@@ -493,7 +494,8 @@ final class LibraryStore: ObservableObject {
             job.clips = clips
             try? beforeEnv.data.write(to: Self.processFolder.appendingPathComponent("\(id.uuidString)-before.bin"))
 
-            if eq == nil && !force && abs(lufsSrc - target) <= 0.5 && clips == 0 && source == url && trimAt == nil {
+            if eq == nil && !force && abs(lufsSrc - target) <= 0.5 && clips == 0 && source == url && trimAt == nil
+                && peakSrc - lufsSrc >= Loudness.expandBelowPLR {
                 job.status = .skipped; job.after = lufsSrc; job.note = "Allerede klar"
                 setJob(job)
                 update(id) { $0.loudnessFixedAt = target; $0.loudnessNote = "Allerede på målet"; $0.originalBackup = backup }
@@ -505,8 +507,11 @@ final class LibraryStore: ObservableObject {
             var afterCh: [[Float]]
             var limiting = 0.0
             var repaired = 0
+            var expandedDB = 0.0
             let steps = Loudness.mp3Steps(lufs: lufsSrc, peakDB: peakSrc, target: target)
-            let lossless = eq == nil && t.ext == "mp3" && clips < 20 && abs(lufsSrc + Double(steps) * 1.5 - target) <= 0.8
+            let squashed = peakSrc - lufsSrc < Loudness.expandBelowPLR      // skal have dynamikken tilbage → PCM
+            let lossless = eq == nil && t.ext == "mp3" && clips < 20 && !squashed
+                && abs(lufsSrc + Double(steps) * 1.5 - target) <= 0.8
 
             if lossless {
                 // MP3: tabsfri ændring af global_gain – ingen genkodning
@@ -528,6 +533,7 @@ final class LibraryStore: ObservableObject {
                 let (out, res) = Loudness.normalizePCM(input, sr: sr, target: target, maxLimitingDB: Loudness.maxLimitingDB)
                 limiting = res.limitingDB
                 repaired = res.clipsRepaired
+                expandedDB = res.expandedDB
                 afterCh = out
                 let keepFormat = ["wav", "aif", "aiff"].contains(t.ext)
                 if !keepFormat {
@@ -590,6 +596,7 @@ final class LibraryStore: ObservableObject {
             job.status = .done
             job.after = m?.lufs
             job.limitingDB = limiting
+            job.expandedDB = expandedDB
             job.clips = max(clips, repaired)
             job.note = finalNote
             setJob(job)

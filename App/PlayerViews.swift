@@ -155,6 +155,7 @@ struct DetailWaveform: View {
                         .font(.system(size: 11)).monospacedDigit().foregroundColor(.mist.opacity(0.6))
                 }
                 .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.65)))
             }
             Spacer()
             if hover {
@@ -231,7 +232,7 @@ struct DetailWaveform: View {
             let rate = MusicAnalyzer.waveformRate
             let prate = MusicAnalyzer.peakRate
             let pcount = peaks.count
-            let levels = 8.0
+            let levels = 16.0
             var paths = [Int: Path]()
             for i in 0..<n {
                 let x = Double(i) * px
@@ -252,21 +253,29 @@ struct DetailWaveform: View {
                               max(WaveColor.sample(bands, at: col, band: 1), WaveColor.sample(bands, at: col, band: 2)))
                 }
                 if amp < 1 { continue }
-                let col = (ta + tb) / 2 * rate
-                let lo = WaveColor.sample(bands, at: col, band: 0)
-                let mi = WaveColor.sample(bands, at: col, band: 1)
-                let hi = WaveColor.sample(bands, at: col, band: 2)
+                // Farven er gennemsnittet over ca. 50 ms (eller pixlens tidsrum), så den ikke flimrer i striber
+                let tm = (ta + tb) / 2
+                let half = max(0.025, (tb - ta) / 2)
+                let ca = max(0, Int((tm - half) * rate)), cb = max(ca + 1, Int((tm + half) * rate) + 1)
+                var lo = 0.0, mi = 0.0, hi = 0.0
+                let bcols = bands.count / 3
+                if ca < bcols {
+                    let end = min(bcols, cb)
+                    for c in ca..<end {
+                        lo += Double(bands[c * 3]); mi += Double(bands[c * 3 + 1]); hi += Double(bands[c * 3 + 2])
+                    }
+                }
                 guard let c = WaveColor.rgb(lo, mi, hi, floor: 0.1) else { continue }
                 // Farverne samles i spande, så hele waveformen tegnes med få fyld-kald
-                let key = Int((c.r * (levels - 1)).rounded()) * 100 + Int((c.g * (levels - 1)).rounded()) * 10
-                    + Int((c.b * (levels - 1)).rounded())
+                let q = levels - 1
+                let key = Int((c.r * q).rounded()) * 10000 + Int((c.g * q).rounded()) * 100 + Int((c.b * q).rounded())
                 let bh = amp / 255 * halfH
                 paths[key, default: Path()].addRect(CGRect(x: x, y: mid - bh, width: px, height: bh * 2))
             }
             for (key, path) in paths {
-                let r = Double(key / 100) / (levels - 1)
-                let g = Double((key / 10) % 10) / (levels - 1)
-                let b = Double(key % 10) / (levels - 1)
+                let r = Double(key / 10000) / (levels - 1)
+                let g = Double((key / 100) % 100) / (levels - 1)
+                let b = Double(key % 100) / (levels - 1)
                 ctx.fill(path, with: .color(Color(red: r, green: g, blue: b)))
             }
         } else {
@@ -275,12 +284,14 @@ struct DetailWaveform: View {
                      at: CGPoint(x: w / 2, y: mid))
         }
 
-        // Beatgrid oven på waveformen (så det ses præcist hvor slaget rammer, også zoomet ind)
+        // Beatgrid oven på waveformen – roligt: zoomet ud kun takter (og fraser), zoomet ind også hvert slag
         if let bpm = track.bpm, bpm > 0 {
             let beat = 60 / bpm
             let fb = firstBeat
             var k = Int(floor((t0 - fb) / beat))
             let pxPerBeat = beat / secsPerPx
+            let showBeats = pxPerBeat >= 28            // ca. 16 s synligt eller tættere på
+            let showBars = pxPerBeat * 4 >= 14
             let line = 1 / max(1, Double(scale))
             while true {
                 let tb = fb + Double(k) * beat
@@ -290,21 +301,16 @@ struct DetailWaveform: View {
                     let inBar = BeatGrid.mod(k, BeatGrid.beatsPerBar)
                     let inPhrase = BeatGrid.mod(k, BeatGrid.beatsPerBar * BeatGrid.barsPerPhrase)
                     if inPhrase == 0 {
-                        ctx.fill(Path(CGRect(x: x - line, y: 0, width: line * 2, height: h)), with: .color(Color.ember.opacity(0.9)))
+                        ctx.fill(Path(CGRect(x: x - line, y: 0, width: line * 2, height: h)), with: .color(Color.ember.opacity(0.85)))
                         let bar = Int(floor(Double(k) / Double(BeatGrid.beatsPerBar))) + 1
                         ctx.draw(Text("\(bar)").font(.system(size: 10, weight: .semibold)).foregroundColor(Color.ember),
                                  at: CGPoint(x: x + 3, y: h - 7), anchor: .leading)
-                    } else if inBar == 0 {
-                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.75)))
-                    } else if pxPerBeat > 6 {
-                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.4)))
-                    }
-                    // Små markeringer øverst og nederst på hvert slag (som rekordbox)
-                    if pxPerBeat > 4 || inBar == 0 {
-                        let tick: Double = inBar == 0 ? 5 : 3
-                        let col: Color = inBar == 0 ? Color(red: 0.95, green: 0.3, blue: 0.25) : Color.white.opacity(0.7)
-                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: tick)), with: .color(col))
-                        ctx.fill(Path(CGRect(x: x - 1, y: h - tick, width: 2, height: tick)), with: .color(col))
+                    } else if inBar == 0 && showBars {
+                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.45)))
+                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: 4)), with: .color(Color(red: 0.95, green: 0.3, blue: 0.25)))
+                    } else if inBar != 0 && showBeats {
+                        ctx.fill(Path(CGRect(x: x - line / 2, y: 0, width: line, height: h)), with: .color(Color.white.opacity(0.22)))
+                        ctx.fill(Path(CGRect(x: x - 1, y: 0, width: 2, height: 3)), with: .color(Color.white.opacity(0.55)))
                     }
                 }
                 k += 1
@@ -354,10 +360,12 @@ struct OverviewWaveform: View {
                         .mask(alignment: .leading) { Rectangle().frame(width: max(0, w * frac)) }
                 }
                 if let zoom, hover {
-                    let zw: CGFloat = max(4, w * CGFloat(zoom / dur))
+                    // Holdes inden for waveformen – også i starten og slutningen af sangen
+                    let zw: CGFloat = min(w, max(4, w * CGFloat(zoom / dur)))
+                    let zx: CGFloat = min(max(0, w * frac - zw / 2), w - zw)
                     RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.6), lineWidth: 1)
                         .frame(width: zw)
-                        .offset(x: w * frac - zw / 2)
+                        .offset(x: zx)
                 }
                 ForEach(Array((track.cues ?? []).enumerated()), id: \.offset) { item in
                     let x: CGFloat = w * CGFloat(item.element / dur)
@@ -379,6 +387,7 @@ struct OverviewWaveform: View {
                     .shadow(color: .black, radius: 2)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
             .onHover { hover = $0 }
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
@@ -804,7 +813,7 @@ struct ProcessPanel: View {
             HStack {
                 Text("Sang").frame(maxWidth: .infinity, alignment: .leading)
                 Text("Klip").frame(width: 56, alignment: .trailing)
-                Text("Limiter").frame(width: 64, alignment: .trailing)
+                Text("Dynamik").frame(width: 96, alignment: .trailing)
                 Text("LUFS").frame(width: 110, alignment: .trailing)
                 Text("Status").frame(width: 130, alignment: .leading).padding(.leading, 12)
             }
@@ -829,13 +838,19 @@ struct ProcessPanel: View {
         HStack {
             Text(j.name).foregroundColor(.mist).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text(j.clips.map(String.init) ?? "–").frame(width: 56, alignment: .trailing)
-            Text(j.limitingDB.map { String(format: "%.1f dB", $0) } ?? "–").frame(width: 64, alignment: .trailing)
+            Text(dynamicsText(j)).frame(width: 96, alignment: .trailing)
             Text(lufsText(j)).frame(width: 110, alignment: .trailing)
             statusText(j).frame(width: 130, alignment: .leading).padding(.leading, 12)
         }
         .font(.system(size: 12)).monospacedDigit().foregroundColor(.mist.opacity(0.8))
         .padding(.horizontal, 8).padding(.vertical, 4)
         .help(j.note)
+    }
+
+    func dynamicsText(_ j: LibraryStore.ProcessJob) -> String {
+        if let e = j.expandedDB, e > 0.5 { return String(format: "Ekspansion +%.0f", e) }
+        if let l = j.limitingDB, l > 0.1 { return String(format: "Limiter %.1f dB", l) }
+        return j.status == .done ? "Ingen" : "–"
     }
 
     func lufsText(_ j: LibraryStore.ProcessJob) -> String {

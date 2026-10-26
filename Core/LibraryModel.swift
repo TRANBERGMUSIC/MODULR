@@ -67,7 +67,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
         return real
     }
 
-    var needsUpgrade: Bool { (tierKbps ?? 9999) < 320 }
+    /// Dårlig kvalitet = under 256 kbps (256 er godt nok til klubben).
+    var needsUpgrade: Bool { (tierKbps ?? 9999) < 256 }
 
     /// Alle formater kan rettes: MP3 tabsfrit, WAV/AIFF i samme format, FLAC/M4A gemmes som 24-bit WAV.
     static let gainFixableExts: Set<String> = ["mp3", "wav", "aif", "aiff", "flac", "m4a", "aac", "alac"]
@@ -76,7 +77,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
     /// Skal lydstyrken rettes til målet? (mere end 1 dB ved siden af og ikke allerede rettet)
     func needsLoudnessFix(target: Double) -> Bool {
         guard let l = lufs, canFixLoudness, loudnessSkip != true else { return false }
-        if let done = loudnessFixedAt, abs(done - target) < 0.05 { return false }
+        // Rettet før til et andet mål (fx −9 → nu −10): rettes igen ud fra originalen
+        if let done = loudnessFixedAt { return abs(done - target) >= 0.05 }
         return abs(l - target) > 1.0
     }
 
@@ -184,7 +186,7 @@ enum LoudnessPrefs {
     static let targetKey = "loud.target"
     static let autoKey = "loud.auto"
     static var target: Double {
-        let v = UserDefaults.standard.object(forKey: targetKey) as? Double ?? -9
+        let v = UserDefaults.standard.object(forKey: targetKey) as? Double ?? -10
         return min(-6, max(-14, v))
     }
     static var autoFix: Bool { UserDefaults.standard.object(forKey: autoKey) as? Bool ?? true }

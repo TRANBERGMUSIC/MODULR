@@ -22,6 +22,7 @@ struct LoudnessFixResult: Equatable {
     var limitingDB: Double
     var note: String
     var clipsRepaired: Int = 0
+    var expandedDB: Double = 0
 }
 
 /// Overblik over en fil til før/efter-visningen: top pr. kolonne (0–255) og om kolonnen har klippede toppe.
@@ -60,7 +61,8 @@ enum LoudnessError: LocalizedError {
 enum Loudness {
     static let ceilingDB = -1.0          // højeste top efter limiteren
     static let mp3CeilingDB = -0.3       // MP3 har ingen limiter – kun løft så langt der er plads
-    static let defaultTarget = -9.0      // klubniveau (justerbart −6 … −12 i Indstillinger)
+    static let defaultTarget = -10.0     // klubniveau (justerbart −6 … −12 i Indstillinger)
+    static let expandBelowPLR = 7.5      // top minus lydstyrke under dette = hårdt komprimeret → ekspansion
     static let maxLimitingDB = 5.0       // mere end det, og lyden begynder at pumpe – så hellere lidt lavere
 
     // MARK: Indlæsning
@@ -356,6 +358,42 @@ enum Loudness {
         return LoudnessEnvelope(peaks: peaks, clips: clips)
     }
 
+    // MARK: Dynamik-ekspansion (som Platinum Notes)
+
+    /// Løfter anslagene (kick, snare) i forhold til det der ligger under, på sange der er mastret helt fladt.
+    /// Hurtig og langsom envelope over begge kanaler; forholdet mellem dem giver løftet. Jo fladere sangen
+    /// er (lav PLR), jo mere løft – højst 6 dB. Gain og limiter tager sig af toppene bagefter.
+    static func expandTransients(_ channels: [[Float]], sr: Double, plr: Double) -> ([[Float]], Double) {
+        let n = channels.first?.count ?? 0
+        guard n > 0 else { return (channels, 0) }
+        let deficit = max(0, 10 - plr)
+        let power = min(0.8, deficit / 10 * 1.6)
+        let maxGain = Float(pow(10, min(6, deficit) / 20))
+        guard power > 0.05 else { return (channels, 0) }
+        let fa = Float(exp(-1 / (sr * 0.001))), fr = Float(exp(-1 / (sr * 0.04)))
+        let sa = Float(exp(-1 / (sr * 0.02))), srl = Float(exp(-1 / (sr * 0.25)))
+        var fast: Float = 0, slow: Float = 0
+        var gains = [Float](repeating: 1, count: n)
+        var top: Float = 1
+        let p = Float(power)
+        for i in 0..<n {
+            var m: Float = 0
+            for ch in channels { m = max(m, abs(ch[i])) }
+            fast = m > fast ? fa * fast + (1 - fa) * m : fr * fast + (1 - fr) * m
+            slow = m > slow ? sa * slow + (1 - sa) * m : srl * slow + (1 - srl) * m
+            let ratio = max(1, fast / max(slow, 1e-6))
+            let g = min(maxGain, powf(ratio, p))
+            gains[i] = g
+            if g > top { top = g }
+        }
+        let out = channels.map { ch -> [Float] in
+            var y = ch
+            for i in 0..<n { y[i] *= gains[i] }
+            return y
+        }
+        return (out, 20 * log10(Double(top)))
+    }
+
     // MARK: Limiter
 
     /// Gain + look-ahead-limiter (5 ms frem, 120 ms slip). Returnerer de nye kanaler og den største dæmpning (dB).
@@ -432,6 +470,14 @@ enum Loudness {
         let before = integratedLUFS(input, sr: sr)
         var channels = input
         let repaired = repairClips ? declip(&channels) : 0
+        // Hårdt komprimeret (lille afstand mellem top og lydstyrke): giv slaget tilbage som Platinum Notes
+        let plr = peakDB(channels) - integratedLUFS(channels, sr: sr)
+        var expanded = 0.0
+        if plr < expandBelowPLR {
+            let (y, db) = expandTransients(channels, sr: sr, plr: plr)
+            channels = y
+            expanded = db
+        }
         var gain = target - before
         var best = channels
         var got = false
@@ -459,9 +505,10 @@ enum Loudness {
         }
         var note = String(format: "%.1f → %.1f LUFS", before, after)
         if repaired > 0 { note += " · \(repaired) klippede toppe rettet" }
+        if expanded > 0.5 { note += String(format: " · dynamik +%.1f dB (ekspansion)", expanded) }
         if after < target - 0.5 { note += String(format: " (holdt %.0f dB under målet for ikke at maste lyden)", target - after) }
         return (best, LoudnessFixResult(before: before, after: after, gainDB: gain, limitingDB: limiting, note: note,
-                                        clipsRepaired: repaired))
+                                        clipsRepaired: repaired, expandedDB: expanded))
     }
 
     // MARK: Skrivning (WAV/AIFF)

@@ -23,7 +23,7 @@ VÆRKTØJER (i venstre side)
     retter BPM og første slag, "Markører" sætter streger hvor du vil mixe,
     "EQ" giver bas/mellem/diskant, og måleren viser om sangen går i det røde.
   * FIKS TRACKS: alle sange måles (LUFS) og rettes automatisk til samme
-    klubniveau (standard -9 LUFS), så du aldrig skal røre gain-knappen.
+    klubniveau (standard -10 LUFS), så du aldrig skal røre gain-knappen.
     WAV/AIFF får gain + limiter (top -1 dBFS) og gemmes som 24-bit, MP3 rettes
     tabsfrit uden genkodning. Originalerne ligger i Musik/MODULR/Originaler –
     højreklik -> "Gendan original". Målet ændres i Indstillinger -> Lydstyrke.
