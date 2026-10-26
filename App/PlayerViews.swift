@@ -752,12 +752,13 @@ struct CueTools: View {
             let shift = NSEvent.modifierFlags.contains(.shift)
             player.hotCue(letter, delete: shift)
         } label: {
+            // Tom = grå; sat = i sin farve (som rekordbox)
             Text(letter)
                 .font(.system(size: 13, weight: .heavy))
-                .foregroundColor(set ? .black : color)
+                .foregroundColor(set ? .black : Color(white: 0.55))
                 .frame(width: 30, height: 30)
-                .background(RoundedRectangle(cornerRadius: 5).fill(set ? color : Color.black.opacity(0.55)))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(color.opacity(set ? 0 : 0.8), lineWidth: 1.5))
+                .background(RoundedRectangle(cornerRadius: 5).fill(set ? color : Color(white: 0.16)))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(white: 0.3).opacity(set ? 0 : 1), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .help(set ? "Hot cue \(letter): hop dertil · shift-klik sletter" : "Hot cue \(letter): sæt ved afspilningshovedet")
@@ -780,57 +781,69 @@ struct CueToolStyle: ButtonStyle {
 
 // MARK: - EQ med drejeknapper
 
-/// Drejeknap: træk op/ned for at skrue, dobbeltklik for 0 dB.
+/// Drejeknap som på en DJM: 0 dB peger lige op (kl. 12), helt til venstre = −26 dB (kill), helt til højre = +6 dB.
+/// Træk op/ned (eller til siden) for at skrue, dobbeltklik for 0 dB.
 struct Knob: View {
     let title: String
     @Binding var value: Double
-    var range: ClosedRange<Double> = -12...6
-    @State private var start: Double?
+    var minDB: Double = -26
+    var maxDB: Double = 6
+    @State private var startF: Double?
+
+    /// dB → knappens stilling 0…1 (0,5 = 0 dB), to lineære halvdele som på en DJM
+    func position(_ v: Double) -> Double {
+        v < 0 ? 0.5 * (1 - v / minDB) : 0.5 + 0.5 * min(1, v / maxDB)
+    }
+
+    func dB(at f: Double) -> Double {
+        let p = max(0, min(1, f))
+        let v = p < 0.5 ? minDB * (1 - p / 0.5) : maxDB * (p - 0.5) / 0.5
+        return (v * 2).rounded() / 2
+    }
 
     var body: some View {
-        let span: Double = range.upperBound - range.lowerBound
-        let f: Double = (value - range.lowerBound) / span
-        let zeroF: Double = (0 - range.lowerBound) / span
-        let startAngle: Double = 135
-        let sweep: Double = 270
+        let f: Double = position(value)
         VStack(spacing: 4) {
             ZStack {
                 Circle().fill(Color(white: 0.14))
                 Circle().stroke(Color.white.opacity(0.08), lineWidth: 1)
-                // Bue fra 0 dB til værdien
-                Circle()
-                    .trim(from: min(zeroF, f) * 0.75, to: max(zeroF, f) * 0.75)
-                    .stroke(Color.ember, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(startAngle))
-                    .padding(-4)
+                // Spor (270°) og bue fra kl. 12 (0 dB) til stillingen
                 Circle()
                     .trim(from: 0, to: 0.75)
                     .stroke(Color.white.opacity(0.1), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(startAngle))
+                    .rotationEffect(.degrees(135))
                     .padding(-4)
+                Circle()
+                    .trim(from: min(0.5, f) * 0.75, to: max(0.5, f) * 0.75)
+                    .stroke(value < -20 ? Color(red: 0.9, green: 0.25, blue: 0.2) : Color.ember,
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(135))
+                    .padding(-4)
+                // Midtermærke kl. 12
+                Rectangle().fill(Color.white.opacity(0.35)).frame(width: 1.5, height: 4).offset(y: -27)
                 // Viser
                 Capsule()
                     .fill(Color.mist)
                     .frame(width: 2.5, height: 11)
                     .offset(y: -10)
-                    .rotationEffect(.degrees(startAngle + f * sweep - 270))
+                    .rotationEffect(.degrees((f - 0.5) * 270))
             }
-            .frame(width: 38, height: 38)
-            .padding(4)
+            .frame(width: 40, height: 40)
+            .padding(5)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
-                    if start == nil { start = value }
-                    let delta = -Double(g.translation.height) / 120 * span
-                    let v = ((start ?? value) + delta) * 2
-                    value = max(range.lowerBound, min(range.upperBound, v.rounded() / 2))
+                    if startF == nil { startF = f }
+                    let delta = (Double(g.translation.width) - Double(g.translation.height)) / 160
+                    value = dB(at: (startF ?? f) + delta)
                 }
-                .onEnded { _ in start = nil })
+                .onEnded { _ in startF = nil })
             .onTapGesture(count: 2) { value = 0 }
             Text(title).font(.system(size: 11, weight: .semibold)).foregroundColor(.mist.opacity(0.7))
-            Text(String(format: "%+.1f dB", value)).font(.system(size: 11)).monospacedDigit().foregroundColor(.mist)
+            Text(value <= minDB + 0.01 ? "KILL" : String(format: "%+.1f dB", value))
+                .font(.system(size: 11)).monospacedDigit().foregroundColor(.mist)
         }
-        .help("Træk op/ned for at skrue. Dobbeltklik = 0 dB.")
+        .help("Træk op/ned for at skrue. Dobbeltklik = 0 dB. Helt ned = kill.")
     }
 }
 

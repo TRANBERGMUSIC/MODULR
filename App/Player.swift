@@ -10,26 +10,28 @@ import AppKit
 import MediaPlayer
 
 struct EQSettings: Codable, Equatable {
-    var low: Double = 0      // dB, lav shelf 100 Hz
-    var mid: Double = 0      // dB, klokke 1 kHz (1,5 oktav)
-    var high: Double = 0     // dB, høj shelf 8 kHz
+    var low: Double = 0      // dB, lav shelf 70 Hz (−26 … +6, som en DJM)
+    var mid: Double = 0      // dB, klokke 1 kHz
+    var high: Double = 0     // dB, høj shelf 13 kHz
 
     var isFlat: Bool { abs(low) < 0.05 && abs(mid) < 0.05 && abs(high) < 0.05 }
 
+    /// Som en DJM-mixer: lav-shelf 70 Hz, mellem-klokke 1 kHz, høj-shelf 13 kHz – −26 til +6 dB.
     func configure(_ unit: AVAudioUnitEQ) {
         let b = unit.bands
         guard b.count >= 3 else { return }
         b[0].filterType = .lowShelf
-        b[0].frequency = 100
+        b[0].frequency = 70
         b[0].gain = Float(low)
         b[1].filterType = .parametric
         b[1].frequency = 1000
-        b[1].bandwidth = 1.5
+        b[1].bandwidth = 2.0
         b[1].gain = Float(mid)
         b[2].filterType = .highShelf
-        b[2].frequency = 8000
+        b[2].frequency = 13000
         b[2].gain = Float(high)
         for band in b { band.bypass = false }
+        unit.bypass = false
         unit.globalGain = 0
     }
 
