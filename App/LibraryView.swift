@@ -1100,7 +1100,6 @@ struct UsbTree: View {
                 if let err = c?.error, c?.ok == false {
                     Text(err).font(.system(size: 10)).foregroundColor(.red.opacity(0.8)).padding(.horizontal, 16)
                 }
-                UsbNodeTree(drive: drive, parent: 0, depth: 1, prompt: prompt)
                 ForEach(pending.filter { $0.kind == .playlist && $0.parent == .root }) { p in
                     SideRow(icon: "music.note.list", title: p.name + "  •ny", count: p.tracks.count,
                             active: ui.selection == .usbPending(drive.id, p.key), italic: true) {
@@ -1130,6 +1129,8 @@ struct UsbTree: View {
                         }
                     }
                 }
+                // Eksisterende playlister under de nye (nye lægges øverst, som på CDJ'en)
+                UsbNodeTree(drive: drive, parent: 0, depth: 1, prompt: prompt)
             }
         }
     }
@@ -1146,6 +1147,14 @@ struct UsbNodeTree: View {
     let parent: Int
     let depth: Int
     let prompt: (String, String, @escaping (String) -> Void) -> Void
+    @State private var openFolders: Set<Int> = []        // mapper er lukkede, til du åbner dem
+
+    init(drive: UsbDrive, parent: Int, depth: Int, prompt: @escaping (String, String, @escaping (String) -> Void) -> Void) {
+        self.drive = drive
+        self.parent = parent
+        self.depth = depth
+        self.prompt = prompt
+    }
 
     func usbFolderMenu(_ n: UsbNodeInfo) -> [MMItem] {
         guard n.folder else { return [] }
@@ -1164,10 +1173,8 @@ struct UsbNodeTree: View {
         if depth > 24 { return [] }
         let all: [UsbNodeInfo] = usb.contents[drive.id]?.nodes ?? []
         let mine = all.filter { n in n.parent == parent && n.id != parent }
-        return mine.sorted { a, b in
-            if a.folder != b.folder { return a.folder }
-            return a.sort < b.sort
-        }
+        // Samme rækkefølge som på CDJ'en (sorteringen fra USB'en – ikke mapper først)
+        return mine.sorted { a, b in a.sort < b.sort }
     }
 
     var body: some View {
@@ -1176,11 +1183,27 @@ struct UsbNodeTree: View {
         let pending = usb.pending[drive.id] ?? []
         ForEach(nodes) { n in
             let added = pending.first { $0.kind == .addTo(n.id) }?.tracks.count ?? 0
-            SideRow(icon: n.folder ? "folder" : "music.note.list", title: n.name + (added > 0 ? "  +\(added)" : ""),
-                    count: n.folder ? nil : n.tracks.count, active: ui.selection == .usb(drive.id, n.id)) {
-                ui.selection = .usb(drive.id, n.id)
+            HStack(spacing: 0) {
+                if n.folder {
+                    Button {
+                        if openFolders.contains(n.id) { openFolders.remove(n.id) } else { openFolders.insert(n.id) }
+                    } label: {
+                        Image(systemName: openFolders.contains(n.id) ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.5)).frame(width: 14)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear.frame(width: 14)
+                }
+                SideRow(icon: n.folder ? "folder" : "music.note.list", title: n.name + (added > 0 ? "  +\(added)" : ""),
+                        count: n.folder ? nil : n.tracks.count, active: ui.selection == .usb(drive.id, n.id)) {
+                    if n.folder {
+                        if openFolders.contains(n.id) { openFolders.remove(n.id) } else { openFolders.insert(n.id) }
+                    }
+                    ui.selection = .usb(drive.id, n.id)
+                }
             }
-            .padding(.leading, CGFloat(depth) * 14)
+            .padding(.leading, CGFloat(depth - 1) * 14)
             .dropDestination(for: String.self) { items, _ in
                 guard !n.folder else { return false }
                 let ids = items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
@@ -1188,7 +1211,7 @@ struct UsbNodeTree: View {
                 return true
             }
             .modMenu(title: n.name) { usbFolderMenu(n) }
-            if n.folder {
+            if n.folder && openFolders.contains(n.id) {
                 UsbNodeTree(drive: drive, parent: n.id, depth: depth + 1, prompt: prompt)
                 ForEach(pending.filter { $0.parent == .existing(n.id) }) { p in
                     SideRow(icon: p.kind == .folder ? "folder.fill" : "music.note.list", title: p.name + "  •ny",

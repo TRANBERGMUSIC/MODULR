@@ -433,8 +433,21 @@ class Pdb(object):
     def add_playlist_node(self, name, parent_id, is_folder):
         existing = self.all(T_PLAYLIST_TREE)
         new_id = max([r["id"] for r in existing] + [0]) + 1
+        # Nye playlister/mapper lægges ØVERST (som det første man ser på CDJ'en): enten før den laveste
+        # eksisterende sortering, eller – hvis der ikke er plads – skubbes søskende én ned.
         siblings = [r for r in existing if r["parent"] == parent_id]
-        sort = max([r["sort"] for r in siblings] + [-1]) + 1
+        if not siblings:
+            sort = 0
+        else:
+            low = min(r["sort"] for r in siblings)
+            if low > 0:
+                sort = low - 1
+            else:
+                for p in list(self.rows(T_PLAYLIST_TREE)):
+                    r = self.read_named(p, T_PLAYLIST_TREE)
+                    if r["parent"] == parent_id:
+                        struct.pack_into("<I", self.data, p + 8, r["sort"] + 1)
+                sort = 0
 
         def b(ri):
             return struct.pack("<5I", parent_id, 0, sort, new_id, 1 if is_folder else 0) + encode_string(name)
