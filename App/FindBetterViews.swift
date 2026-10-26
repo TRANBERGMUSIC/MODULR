@@ -52,8 +52,12 @@ struct FindBetterToolView: View {
                         }
                         if let m = model.message {
                             HStack(spacing: 8) {
-                                if model.busy { ProgressView().controlSize(.small) }
+                                if model.busy || model.watchingDownloads { ProgressView().controlSize(.small) }
                                 Text(m).foregroundStyle(.secondary)
+                                if model.watchingDownloads {
+                                    Spacer()
+                                    Button("Annullér") { model.stopWatching() }
+                                }
                             }
                         }
                         if let q = model.original {
@@ -119,7 +123,9 @@ struct FindBetterToolView: View {
             }
             Button("Annullér", role: .cancel) { model.pendingGateCandidate = nil }
         } message: {
-            Text("Siden åbner i MODULRs browser. Du gennemfører selv trinene (fx follow eller e-mail). MODULR klikker ikke for dig og fanger kun filen, siden selv giver dig.")
+            Text(model.settings.useSystemBrowser
+                 ? "Siden åbner i din egen browser, hvor du er logget ind (også med Google). Gennemfør trinene der – MODULR fanger filen i Overførsler og tjekker den."
+                 : "Siden åbner i MODULRs browser. Du gennemfører selv trinene (fx follow eller e-mail). MODULR klikker ikke for dig og fanger kun filen, siden selv giver dig.")
         }
     }
 

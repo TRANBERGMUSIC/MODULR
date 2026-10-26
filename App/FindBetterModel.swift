@@ -69,8 +69,13 @@ final class FindBetterModel: ObservableObject {
     private var artistLinks = ArtistLinks()
     private var activeCandidate: Candidate?
 
-    init(settings: FBSettings) {
+    let library: ArtworkLibrary
+    @Published var watchingDownloads = false
+    private var watcher: DownloadsWatcher?
+
+    init(settings: FBSettings, library: ArtworkLibrary) {
         self.settings = settings
+        self.library = library
     }
 
     func reset() {
@@ -332,8 +337,36 @@ final class FindBetterModel: ObservableObject {
     func openGate(_ page: ApprovedPage) {
         pendingGateCandidate = nil
         step = .gate
-        message = "Gennemfør selv trinene på siden. MODULR klikker ikke og udfylder intet for dig."
-        gateTicket = SourcePolicy.startSession(for: page)
+        let ticket = SourcePolicy.startSession(for: page)
+        if settings.useSystemBrowser {
+            // Din egen browser (Safari/Chrome): her virker "Log ind med Google", og du er allerede logget ind.
+            message = "Gaten er åbnet i din browser. Gennemfør trinene der – MODULR fanger filen i Overførsler af sig selv."
+            watchingDownloads = true
+            let w = DownloadsWatcher { [weak self] file, source in
+                guard let self else { return }
+                self.watchingDownloads = false
+                self.watcher = nil
+                self.browserDownloaded(file: file, sourceURL: source, ticket: ticket, pageTitle: nil)
+            } onTimeout: { [weak self] in
+                self?.watchingDownloads = false
+                self?.watcher = nil
+                self?.step = .candidates
+                self?.message = "Ingen ny fil i Overførsler efter 20 minutter – prøv igen."
+            }
+            watcher = w
+            w.start()
+            NSWorkspace.shared.open(page.url)
+        } else {
+            message = "Gennemfør selv trinene på siden. MODULR klikker ikke og udfylder intet for dig."
+            gateTicket = ticket
+        }
+    }
+
+    func stopWatching() {
+        watcher?.stop()
+        watcher = nil
+        watchingDownloads = false
+        if step == .gate { step = .candidates; message = nil }
     }
 
     /// Kaldes af gate-browseren, når en download er færdig.
@@ -458,6 +491,18 @@ final class FindBetterModel: ObservableObject {
             }
         }
 
+        // Artwork: flyt coveret fra din gamle version med over (eller find det i biblioteket/iTunes)
+        var artNote = "Artwork: den nye fil havde allerede et cover"
+        if await ArtworkLibrary.extract(from: dest) == nil {
+            let oldArt = await ArtworkLibrary.extract(from: original)
+            let id0 = await MainActor.run { self.identity }
+            let song = id0.map { SongInfo(artists: $0.artists, title: $0.title, version: $0.version) } ?? ArtworkLibrary.song(for: original)
+            let r = await library.applyBest(to: dest, song: song, fallbackData: oldArt, useITunes: true)
+            artNote = "Artwork: \(r)"
+        } else if let data = await ArtworkLibrary.extract(from: dest), let song = ArtworkLibrary.song(for: dest) {
+            library.add(data, song: song, source: "Fra fil: \(dest.lastPathComponent)", file: dest)
+        }
+
         let id = await MainActor.run { self.identity }
         let df = ISO8601DateFormatter()
         var lines = [
@@ -466,7 +511,7 @@ final class FindBetterModel: ObservableObject {
             "Fil: \(dest.lastPathComponent)",
             "Hentet: \(df.string(from: Date()))",
             "Sang: \(id?.displayName ?? "?")" + (id?.isrc.map { "  ISRC \($0)" } ?? ""),
-            "Kilde: \(approved.source.title)\(approved.viaBrowser ? " (hentet af dig i MODULRs browser)" : " (officielt API)")",
+            "Kilde: \(approved.source.title)\(approved.viaBrowser ? " (hentet af dig i browseren)" : " (officielt API)")",
         ]
         if let p = approved.pageURL ?? candidate.flatMap({ URL(string: $0.raw.pageURL) }) { lines.append("Side: \(p.absoluteString)") }
         if let t = pageTitle { lines.append("Sidens titel: \(t)") }
@@ -476,6 +521,7 @@ final class FindBetterModel: ObservableObject {
         lines.append("Ny fil: \(new.label) (score \(new.score))")
         lines.append("Fingerprint: \(comparison.percent) % af sangen matcher din fil")
         lines.append(tagNote)
+        lines.append(artNote)
         let prov = dir.appendingPathComponent(dest.deletingPathExtension().lastPathComponent + ".herkomst.txt")
         try lines.joined(separator: "\n").write(to: prov, atomically: true, encoding: .utf8)
 

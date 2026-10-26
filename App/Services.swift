@@ -199,6 +199,7 @@ final class FBSettings: ObservableObject {
     @Published var askBeforeGate: Bool { didSet { saveFlags() } }
     @Published var showOtherVersions: Bool { didSet { saveFlags() } }
     @Published var rule: ImprovementRule { didSet { saveFlags() } }
+    @Published var useSystemBrowser: Bool { didSet { saveFlags() } }
     @Published var keys: APIKeys { didSet { saveKeys() } }
 
     private let d = UserDefaults.standard
@@ -213,6 +214,7 @@ final class FBSettings: ObservableObject {
         askBeforeGate = d.object(forKey: "fb.askgate") as? Bool ?? true
         showOtherVersions = d.object(forKey: "fb.otherversions") as? Bool ?? false
         rule = ImprovementRule(rawValue: d.string(forKey: "fb.rule") ?? "") ?? .realTier
+        useSystemBrowser = d.object(forKey: "fb.systembrowser") as? Bool ?? true
         if let data = try? Data(contentsOf: FBSettings.keysFile),
            let k = try? JSONDecoder().decode(APIKeys.self, from: data) {
             keys = k
@@ -229,6 +231,7 @@ final class FBSettings: ObservableObject {
         d.set(askBeforeGate, forKey: "fb.askgate")
         d.set(showOtherVersions, forKey: "fb.otherversions")
         d.set(rule.rawValue, forKey: "fb.rule")
+        d.set(useSystemBrowser, forKey: "fb.systembrowser")
     }
 
     private func saveKeys() {

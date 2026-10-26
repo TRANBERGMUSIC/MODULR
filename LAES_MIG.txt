@@ -17,11 +17,22 @@ VÆRKTØJER (vælges øverst til højre)
   Gates (Hypeddit, ToneDen ...) åbner i MODULRs browser, hvor DU selv gennemfører
   trinene. Den hentede fil tjekkes med fingerprint og gemmes kun, hvis det er
   præcis samme sang og reelt bedre - med en .herkomst.txt ved siden af.
-- ARTWORK: træk WAV/AIFF/MP3-filer ind til venstre og et billede til højre.
-  Billedet gemmes i filen som JPEG (maks. 800x800), som Pioneer kræver.
-  I rekordbox: marker sporene, højreklik -> "Reload Tag", og eksportér til USB.
+- ARTWORK:
+  * Auto-udfyld: træk hele din musikmappe ind. MODULR gemmer coveret fra alle
+    filer der har et (også gamle MP3'er) og lægger det på dem der mangler - fx
+    dine WAV-filer. Ikke fundet lokalt? Så hentes det fra iTunes (kan slås fra).
+  * Bibliotek: alle gemte covers. Træk et bedre billede over et cover (eller
+    højreklik -> Udskift) - så opdateres alle filer, der bruger det.
+  * Manuelt: læg ét billede på valgte filer.
+  Covers gemmes som JPEG maks. 800x800, som Pioneer kræver. I rekordbox:
+  marker sporene, højreklik -> "Reload Tag", og eksportér til USB.
+  Når "Find bedre version" gemmer en ny fil, flytter den coveret fra din gamle
+  version med over automatisk.
 
 KONTI (log ind én gang)
+- Google-login: gates åbner som standard i DIN browser (Safari/Chrome), hvor du
+  allerede er logget ind med Google. MODULR fanger filen i Overførsler og tjekker
+  den. Første gang spørger macOS om adgang til Overførsler - svar OK.
 - Vælg KONTI øverst til højre og klik "Log ind" ved SoundCloud, Hypeddit, ToneDen,
   Spotify, Instagram og Bandcamp. Du logger selv ind på deres egne sider; MODULR
   husker det, så gates i MODULR typisk kun kræver et par klik bagefter.

@@ -183,7 +183,20 @@ struct AccountsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Log ind én gang her. MODULR husker det, så du ikke skal logge ind igen, når en gate beder om det. Du skriver selv brugernavn og kodeord på tjenesternes egne sider.")
+                Card(title: "Log ind med Google") {
+                    Text("Google tillader ikke login inde i apps' indbyggede browsere. Derfor åbner MODULR som standard gates i din egen browser (Safari/Chrome), hvor du allerede er logget ind med Google. MODULR fanger filen i Overførsler automatisk og tjekker den.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Åbn gates i min egen browser", isOn: $settings.useSystemBrowser)
+                    Text(settings.useSystemBrowser
+                         ? "Du behøver ikke logge ind herunder – brug bare din browser som normalt. Første gang spørger macOS, om MODULR må se mappen Overførsler: svar OK."
+                         : "Gates åbner i MODULRs egen browser. Log ind herunder med e-mail og kodeord (ikke Google).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("Login i MODULRs egen browser (kun hvis du ikke bruger din egen browser til gates). Du skriver selv brugernavn og kodeord på tjenesternes egne sider.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -209,13 +222,10 @@ struct AccountsView: View {
                         .padding(.vertical, 4)
                         Divider()
                     }
-                    Text("Tip: \"Log ind med Google\" virker ofte ikke i indbyggede browsere – brug e-mail og kodeord eller Apple.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 Card(title: "SoundCloud-API (søgning og direkte downloads)") {
-                    Text("For at MODULR kan søge på SoundCloud og hente filer, kunstnerne har slået download til, skal du have en SoundCloud-app. Det er gratis, men SoundCloud skal godkende den:")
+                    Text("For at MODULR kan søge på SoundCloud og hente filer, kunstnerne har slået download til, skal du have en SoundCloud-app. Det er gratis, men SoundCloud skal godkende den. (Selve login sker i Safari-vinduet fra macOS, så \"Fortsæt med Google\" virker her.)")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: 4) {

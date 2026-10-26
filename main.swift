@@ -815,11 +815,15 @@ struct ModulrApp: App {
     @StateObject private var findBetter: FindBetterModel
     @StateObject private var artwork = ArtworkModel()
     @StateObject private var accounts = AccountsModel()
+    @StateObject private var library: ArtworkLibrary
+    @StateObject private var autoFill = AutoFillModel()
 
     init() {
         let s = FBSettings()
+        let lib = ArtworkLibrary()
         _settings = StateObject(wrappedValue: s)
-        _findBetter = StateObject(wrappedValue: FindBetterModel(settings: s))
+        _library = StateObject(wrappedValue: lib)
+        _findBetter = StateObject(wrappedValue: FindBetterModel(settings: s, library: lib))
     }
 
     var body: some Scene {
@@ -831,6 +835,8 @@ struct ModulrApp: App {
                 .environmentObject(findBetter)
                 .environmentObject(artwork)
                 .environmentObject(accounts)
+                .environmentObject(library)
+                .environmentObject(autoFill)
                 .frame(minWidth: 1100, minHeight: 720)
                 .background(Color.void)
                 .preferredColorScheme(.dark)

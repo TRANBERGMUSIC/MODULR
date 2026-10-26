@@ -12,6 +12,29 @@ enum ArtworkImage {
     /// Laver et CDJ-venligt JPEG: maks. 800×800, uden gennemsigtighed, høj kvalitet.
     static func cdjJPEG(from url: URL) -> Data? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return jpeg(src, maxSide: maxSide)
+    }
+
+    static func cdjJPEG(data: Data) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return jpeg(src, maxSide: maxSide)
+    }
+
+    /// Bibliotekets kopi gemmes i højere opløsning (maks. 1400), så den kan bruges igen senere.
+    static func libraryJPEG(data: Data) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return jpeg(src, maxSide: 1400)
+    }
+
+    static func pixelSize(_ data: Data) -> (Int, Int)? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return (w, h)
+    }
+
+    static func jpeg(_ src: CGImageSource, maxSide: Int) -> Data? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxSide,
@@ -120,7 +143,7 @@ final class ArtworkModel: ObservableObject {
     }
 }
 
-struct ArtworkToolView: View {
+struct ManualArtworkView: View {
     @EnvironmentObject var model: ArtworkModel
     @State private var filesTargeted = false
     @State private var imageTargeted = false

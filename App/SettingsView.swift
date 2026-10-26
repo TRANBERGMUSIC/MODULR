@@ -50,6 +50,7 @@ struct SettingsView: View {
                 Picker("Hent kun når", selection: $settings.rule) {
                     ForEach(ImprovementRule.allCases) { r in Text(r.title).tag(r) }
                 }
+                Toggle("Åbn gates i min egen browser (Safari/Chrome – virker med Google-login)", isOn: $settings.useSystemBrowser)
                 Toggle("Spørg før en download-gate åbnes", isOn: $settings.askBeforeGate)
                 Toggle("Vis også andre versioner (radio edit, extended, remix)", isOn: $settings.showOtherVersions)
             }

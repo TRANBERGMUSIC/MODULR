@@ -7,7 +7,8 @@
 - **Bitrate-tjek**: analyserer selve lyden og afslører filer, der er opkonverteret fra lav bitrate (fx 128 kbps gemt som 320).
 - **Find bedre version**: genkender præcis sangen ud fra lyden (Chromaprint/AcoustID, valgfrit AudD/ACRCloud) og finder steder, hvor kunstneren eller labelet selv giver den gratis i bedre kvalitet: SoundCloud (officielt API, kun `downloadable`), Bandcamp (gratis / name your price), download-gates (Hypeddit, ToneDen, lnk.to, Fanlink) og kunstnerens egne sider. Gates gennemfører du selv i appens browser. Den hentede fil verificeres med fingerprint og kvalitetsanalyse og gemmes kun, hvis den er præcis samme sang og reelt bedre – med en herkomst-fil ved siden af.
 - **Konti**: log ind én gang hos SoundCloud, Hypeddit, ToneDen, Spotify, Instagram og Bandcamp i MODULRs browser (delt med gate-browseren), og forbind din SoundCloud-konto til API'et med OAuth 2.1 + PKCE (redirect-URI `modulr://soundcloud/callback`).
-- **Artwork**: lægger et billede ind i WAV, AIFF og MP3 som ID3-tag (JPEG, maks. 800×800), så det vises i rekordbox og på CDJ'en.
+- **Artwork**: bibliotek over covers samlet fra dine filer (også de dårlige versioner). Auto-udfyld lægger covers på filer der mangler (fx WAV) – fra biblioteket eller iTunes som reserve – og "Find bedre version" flytter coveret med over på den nye fil. Covers kan udskiftes, og alle filer der bruger dem opdateres. Skrives som ID3 i WAV, AIFF og MP3 (JPEG, maks. 800×800) til rekordbox/CDJ.
+- **Gates i din egen browser** (standard): Google-login virker, og MODULR fanger filen i Overførsler (kilden tjekkes via macOS' "Hentet fra").
 
 ## Hvad MODULR aldrig gør
 

@@ -338,6 +338,29 @@ do {
     check("Betalt spor bliver kun købslink", paid?.kind == .purchaseOnly)
 }
 
+// MARK: - Artwork-bibliotek
+
+section("Artwork-matchning")
+do {
+    func entry(_ a: [String], _ t: String, _ v: String?, _ w: Int = 600) -> ArtworkEntry {
+        ArtworkEntry(id: UUID(), artists: a, title: t, version: v, imageFile: "x.jpg", width: w, height: w,
+                     source: "test", addedAt: Date(), files: [])
+    }
+    let lib = [entry(["FISHER"], "Losing It", nil, 500), entry(["FISHER"], "Losing It", nil, 1400),
+               entry(["FISHER"], "Losing It", "Chris Lake Remix"), entry(["Someone"], "Other Song", nil)]
+    let wav = SongInfo(artist: "FISHER", rawTitle: "Losing It (Extended Mix)")!
+    check("WAV (extended) får originalens cover", ArtworkMatcher.best(for: wav, in: lib)?.version == nil)
+    check("Største billede vælges ved lige match", ArtworkMatcher.best(for: wav, in: lib)?.width == 1400)
+    let remix = SongInfo(artist: "FISHER", rawTitle: "Losing It (Chris Lake Remix)")!
+    check("Remix får remixets eget cover", ArtworkMatcher.best(for: remix, in: lib)?.version == "Chris Lake Remix")
+    let otherRemix = SongInfo(artist: "FISHER", rawTitle: "Losing It (Someone Remix)")!
+    check("Et andet remix får IKKE originalens cover", ArtworkMatcher.best(for: otherRemix, in: [lib[0]]) == nil)
+    let fromName = SongInfo(artist: nil, rawTitle: "Losing It")!
+    check("Fil uden kunstner-tag matcher på titel", ArtworkMatcher.best(for: fromName, in: lib) != nil)
+    check("Anden sang matcher ikke", ArtworkMatcher.best(for: SongInfo(artist: "FISHER", rawTitle: "Stop It")!, in: lib) == nil)
+    check("Samme sang genkendes til udskiftning", ArtworkMatcher.sameSong(lib[0], SongInfo(artist: "Fisher", rawTitle: "Losing It (Original Mix)")!))
+}
+
 // MARK: - robots.txt
 
 section("robots.txt")
