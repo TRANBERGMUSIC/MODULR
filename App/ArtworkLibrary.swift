@@ -7,6 +7,8 @@ import AVFoundation
 import UniformTypeIdentifiers
 
 final class ArtworkLibrary: ObservableObject {
+    static let shared = ArtworkLibrary()
+
     @Published private(set) var entries: [ArtworkEntry] = []
 
     private let lock = NSLock()
@@ -211,110 +213,16 @@ final class ArtworkLibrary: ObservableObject {
     }
 }
 
-// MARK: - Auto-udfyld
-
-struct AutoFillRow: Identifiable {
-    let id = UUID()
-    let url: URL
-    var status: String
-    var state: State
-
-    enum State { case had, added, missing, failed, pending }
-
-    var icon: String {
-        switch state {
-        case .had: return "🖼"
-        case .added: return "✅"
-        case .missing: return "▫️"
-        case .failed: return "⛔️"
-        case .pending: return "⏳"
-        }
-    }
-}
-
-final class AutoFillModel: ObservableObject {
-    @Published var rows: [AutoFillRow] = []
-    @Published var busy = false
-    @Published var summary: String?
-    @Published var useITunes: Bool {
-        didSet { UserDefaults.standard.set(useITunes, forKey: "artwork.itunes") }
-    }
-
-    init() {
-        useITunes = UserDefaults.standard.object(forKey: "artwork.itunes") as? Bool ?? true
-    }
-
-    func run(_ urls: [URL], library: ArtworkLibrary) {
-        var files = [URL]()
-        for u in urls {
-            var isDir: ObjCBool = false
-            _ = FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir)
-            if isDir.boolValue {
-                let en = FileManager.default.enumerator(at: u, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-                while let f = en?.nextObject() as? URL {
-                    if ArtworkLibrary.audioExts.contains(f.pathExtension.lowercased()) { files.append(f) }
-                }
-            } else if ArtworkLibrary.audioExts.contains(u.pathExtension.lowercased()) {
-                files.append(u)
-            }
-        }
-        files.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-        rows = files.map { AutoFillRow(url: $0, status: "Venter …", state: .pending) }
-        summary = nil
-        busy = true
-        let itunes = useITunes
-        Task {
-            // 1) Saml covers fra alle filer der har et (også de dårlige versioner)
-            var missing = [(Int, URL, SongInfo?)]()
-            var collected = 0
-            for (i, f) in files.enumerated() {
-                let song = ArtworkLibrary.song(for: f)
-                if let data = await ArtworkLibrary.extract(from: f) {
-                    if let song, library.add(data, song: song, source: "Fra fil: \(f.lastPathComponent)", file: f) != nil {
-                        collected += 1
-                    }
-                    await self.setRow(i, "Har artwork – gemt i biblioteket", .had)
-                } else {
-                    missing.append((i, f, song))
-                    await self.setRow(i, "Mangler artwork", .pending)
-                }
-            }
-            // 2) Læg covers på de filer der mangler
-            var added = 0, notFound = 0
-            for (i, f, song) in missing {
-                let result = await library.applyBest(to: f, song: song, fallbackData: nil, useITunes: itunes)
-                let ok = result.hasPrefix("Artwork tilføjet")
-                if ok { added += 1 } else if result == "Intet artwork fundet" { notFound += 1 }
-                await self.setRow(i, song == nil ? result + " (ingen titel i tags/filnavn)" : result,
-                                  ok ? .added : (result == "Intet artwork fundet" ? .missing : .failed))
-            }
-            let text = "\(collected) covers gemt i biblioteket · \(added) filer fik artwork · \(notFound) uden fund"
-            await MainActor.run {
-                self.summary = text
-                self.busy = false
-            }
-        }
-    }
-
-    @MainActor
-    private func setRow(_ i: Int, _ status: String, _ state: AutoFillRow.State) {
-        guard i < rows.count else { return }
-        rows[i].status = status
-        rows[i].state = state
-    }
-}
-
 // MARK: - Skærme
 
 enum ArtworkMode: String, CaseIterable, Identifiable {
-    case autofill = "Auto-udfyld"
-    case library = "Bibliotek"
+    case covers = "Covers"
     case manual = "Manuelt"
     var id: String { rawValue }
 }
 
 struct ArtworkToolView: View {
-    @State private var mode: ArtworkMode = .autofill
+    @State private var mode: ArtworkMode = .covers
 
     var body: some View {
         VStack(spacing: 0) {
@@ -323,84 +231,16 @@ struct ArtworkToolView: View {
                     ForEach(ArtworkMode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 360)
+                .frame(width: 440)
                 Spacer()
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
             switch mode {
-            case .autofill: AutoFillView()
-            case .library: ArtworkLibraryView()
+            case .covers: ArtworkLibraryView()
             case .manual: ManualArtworkView()
             }
         }
-    }
-}
-
-struct AutoFillView: View {
-    @EnvironmentObject var library: ArtworkLibrary
-    @EnvironmentObject var auto: AutoFillModel
-    @State private var targeted = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Button("Vælg mapper eller filer…") { pick() }
-                    .buttonStyle(.ember)
-                    .disabled(auto.busy)
-                Toggle("Hent manglende covers fra iTunes", isOn: $auto.useITunes)
-                Spacer()
-                if auto.busy { ProgressView().controlSize(.small) }
-                if let s = auto.summary { Text(s).foregroundStyle(.secondary) }
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 8)
-            if auto.rows.isEmpty {
-                DropZone(icon: "photo.stack", title: "Træk din musikmappe herind",
-                         subtitle: "MODULR gemmer coveret fra alle filer, der har et (også dine gamle MP3'er), og lægger det på de filer, der mangler – fx dine WAV-filer. Finder den ikke et cover lokalt, hentes det fra iTunes.",
-                         targeted: targeted, buttonTitle: "Vælg mappe…", action: pick)
-            } else {
-                List(auto.rows) { r in
-                    HStack {
-                        Text(r.icon)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(r.url.lastPathComponent).lineLimit(1)
-                            Text(r.status).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                .scrollContentBackground(.hidden)
-                .background(Color.white.opacity(0.02))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.hairline, lineWidth: 1))
-                .padding(.horizontal, 24)
-                .padding(.bottom, 20)
-                }
-            }
-        }
-        .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
-            let collector = URLCollector()
-            let group = DispatchGroup()
-            for p in providers {
-                group.enter()
-                _ = p.loadObject(ofClass: URL.self) { url, _ in
-                    if let url { collector.add(url) }
-                    group.leave()
-                }
-            }
-            group.notify(queue: .main) {
-                let urls = collector.all
-                if !urls.isEmpty { auto.run(urls, library: library) }
-            }
-            return true
-        }
-    }
-
-    func pick() {
-        let p = NSOpenPanel()
-        p.canChooseFiles = true
-        p.canChooseDirectories = true
-        p.allowsMultipleSelection = true
-        if p.runModal() == .OK { auto.run(p.urls, library: library) }
     }
 }
 
@@ -439,7 +279,7 @@ struct ArtworkLibraryView: View {
                         .font(.system(size: 44))
                         .foregroundColor(.ember)
                     Text("Biblioteket er tomt").font(.title3)
-                    Text("Kør Auto-udfyld på din musikmappe, så samles alle covers her.")
+                    Text("Covers samles automatisk her, når du sætter sange ind i biblioteket.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

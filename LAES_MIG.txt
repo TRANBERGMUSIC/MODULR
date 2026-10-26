@@ -10,24 +10,31 @@ og kør trin 3 igen bagefter. Installeren henter også fpcalc (lyd-fingerprint).
 
 Herefter opdaterer appen sig selv, når der kommer en ny version på GitHub.
 
-VÆRKTØJER (vælges øverst til højre)
+VÆRKTØJER (i venstre side)
+- BIBLIOTEK: al din musik. Træk filer/mapper ind (eller "Tilføj sange"). MODULR
+  analyserer BPM, toneart (Camelot 1A–12B), energi (1–10), længde, RGB-waveform og
+  den reelle kvalitet: rød = 128 kbps, gul = 192–256, grøn = 320/lossless.
+  * Camelot-hjulet: klik på tonearter for at filtrere. Den spillende sangs
+    harmoniske naboer lyser op.
+  * Playlister og mapper: "+" ved PLAYLISTER. Træk sange over på en playliste.
+  * Dobbeltklik på en sang for at afspille den.
+  * Højreklik -> "Udskift fil med bedre version...": MODULR tjekker at det er
+    samme sang og reelt bedre, lægger den nye fil samme sted (den gamle i
+    papirkurven) og beholder alle data - cover, titel, BPM, toneart - på den nye.
+  * USB: sæt et USB-stik i, der er sat op med rekordbox. Det dukker op under USB.
+    Træk sange over på en USB-playliste, eller højreklik på USB'en for ny
+    playliste/mappe. Tryk "Skriv til USB": sangene kopieres, rekordbox-
+    databasen opdateres (med backup først), og waveform/beatgrid skrives, så
+    CDJ'en kan spille dem. Tryk "Skub ud", og sæt stikket i CDJ'en.
+    CDJ-3000X: sæt USB'en i rekordbox 7, højreklik på "OneLibrary" og vælg
+    "Convert from Device Library".
 - BITRATE-TJEK: træk filer/mapper ind og se om de reelt er 320 eller opkonverteret.
 - FIND BEDRE VERSION: træk én sang ind. MODULR genkender den ud fra lyden og leder
   efter gratis versioner i bedre kvalitet, som kunstneren/labelet selv har lagt op.
-  Gates (Hypeddit, ToneDen ...) åbner i MODULRs browser, hvor DU selv gennemfører
-  trinene. Den hentede fil tjekkes med fingerprint og gemmes kun, hvis det er
-  præcis samme sang og reelt bedre - med en .herkomst.txt ved siden af.
-- ARTWORK:
-  * Auto-udfyld: træk hele din musikmappe ind. MODULR gemmer coveret fra alle
-    filer der har et (også gamle MP3'er) og lægger det på dem der mangler - fx
-    dine WAV-filer. Ikke fundet lokalt? Så hentes det fra iTunes (kan slås fra).
-  * Bibliotek: alle gemte covers. Træk et bedre billede over et cover (eller
-    højreklik -> Udskift) - så opdateres alle filer, der bruger det.
-  * Manuelt: læg ét billede på valgte filer.
-  Covers gemmes som JPEG maks. 800x800, som Pioneer kræver. I rekordbox:
-  marker sporene, højreklik -> "Reload Tag", og eksportér til USB.
-  Når "Find bedre version" gemmer en ny fil, flytter den coveret fra din gamle
-  version med over automatisk.
+  Den hentede fil tjekkes og gemmes kun, hvis det er præcis samme sang og reelt
+  bedre - med en .herkomst.txt ved siden af.
+- ARTWORK: alle covers (Covers) og læg ét billede på filer (Manuelt). JPEG maks.
+  800x800 som Pioneer kræver.
 
 KONTI (log ind én gang)
 - Google-login: gates åbner som standard i DIN browser (Safari/Chrome), hvor du

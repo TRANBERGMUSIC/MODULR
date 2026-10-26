@@ -48,6 +48,7 @@ func khz(_ hz: Double) -> String {
 }
 
 enum Tool: String, CaseIterable, Identifiable {
+    case library = "Bibliotek"
     case bitrate = "Bitrate-tjek"
     case findBetter = "Find bedre version"
     case artwork = "Artwork"
@@ -56,7 +57,7 @@ enum Tool: String, CaseIterable, Identifiable {
 }
 
 final class AppModel: ObservableObject {
-    @Published var tool: Tool = .bitrate
+    @Published var tool: Tool = .library
     @Published var findBetterRequest: URL?
     @Published var rows: [TrackRow] = []
     @Published var selection: TrackRow.ID?
@@ -84,6 +85,8 @@ final class AppModel: ObservableObject {
             }
         }
         rows.append(contentsOf: newRows)
+        // Alt du sætter ind i MODULR havner i biblioteket
+        LibraryStore.shared.importFiles(newRows.map(\.url))
         if selection == nil { selection = newRows.first?.id }
         for row in newRows {
             let id = row.id
@@ -815,11 +818,12 @@ struct ModulrApp: App {
     @StateObject private var artwork = ArtworkModel()
     @StateObject private var accounts = AccountsModel()
     @StateObject private var library: ArtworkLibrary
-    @StateObject private var autoFill = AutoFillModel()
+    @StateObject private var libraryStore = LibraryStore.shared
+    @StateObject private var usbStore = UsbStore.shared
 
     init() {
         let s = FBSettings()
-        let lib = ArtworkLibrary()
+        let lib = ArtworkLibrary.shared
         _settings = StateObject(wrappedValue: s)
         _library = StateObject(wrappedValue: lib)
         _findBetter = StateObject(wrappedValue: FindBetterModel(settings: s, library: lib))
@@ -835,9 +839,10 @@ struct ModulrApp: App {
                 .environmentObject(artwork)
                 .environmentObject(accounts)
                 .environmentObject(library)
-                .environmentObject(autoFill)
+                .environmentObject(libraryStore)
+                .environmentObject(usbStore)
                 .buttonStyle(.ghost)
-                .frame(minWidth: 1180, minHeight: 760)
+                .frame(minWidth: 1280, minHeight: 820)
                 .background(Color.void)
                 .preferredColorScheme(.dark)
                 .tint(Color.ember)

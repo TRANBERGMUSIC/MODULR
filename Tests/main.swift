@@ -361,6 +361,86 @@ do {
     check("Samme sang genkendes til udskiftning", ArtworkMatcher.sameSong(lib[0], SongInfo(artist: "Fisher", rawTitle: "Losing It (Original Mix)")!))
 }
 
+section("Camelot og bibliotek")
+do {
+    check("Am = 8A", MusicalKey.parse("Am")?.camelot == "8A")
+    check("C = 8B", MusicalKey.parse("C")?.camelot == "8B")
+    check("Bbm = 3A", MusicalKey.parse("Bbm")?.camelot == "3A")
+    check("Ab = 4B", MusicalKey.parse("Ab")?.camelot == "4B")
+    check("F#m = 11A", MusicalKey.parse("F#m")?.camelot == "11A")
+    check("\"8A - Energy 6\" (Mixed In Key) = Am", MusicalKey.parse("8A - Energy 6")?.classic == "Am")
+    check("\"12B\" = E", MusicalKey.parse("12B")?.classic == "E")
+    check("Open Key 1m = 8A", MusicalKey.parse("1m")?.camelot == "8A")
+    check("\"A minor\" = 8A", MusicalKey.parse("A minor")?.camelot == "8A")
+    for n in 1...12 { for m in [true, false] {
+        let k = MusicalKey(camelotNumber: n, minor: m)!
+        check("Camelot \(n)\(m ? "A" : "B") rundtur", k.camelotNumber == n && k.minor == m && MusicalKey.parse(k.classic) == k)
+    } }
+    check("Harmoniske naboer til 8A", Set(MusicalKey.parse("8A")!.compatible.map(\.camelot)) == ["8B", "9A", "7A"])
+    check("Kvalitetsfarver", QualityColor.forTier(128) == .red && QualityColor.forTier(256) == .yellow && QualityColor.forTier(320) == .green && QualityColor.forTier(9999) == .green)
+    var t = LibTrack(path: "/x/a.mp3")
+    t.codec = "MP3"; t.statedKbps = 320; t.tierKbps = 128; t.analyzed = true
+    check("Fake 320 vises", t.qualityText == "Fake 320 → 128" && t.needsUpgrade, t.qualityText)
+    t.tierKbps = 320
+    check("Ægte 320 vises", t.qualityText == "320 kbps" && !t.needsUpgrade, t.qualityText)
+    var idx = LibraryIndex()
+    var f = LibNode(name: "Fredag", parent: nil, isFolder: true, sort: 0)
+    var p1 = LibNode(name: "Warm-up", parent: f.id, isFolder: false, sort: 0)
+    p1.trackIDs = [t.id]
+    idx.tracks = [t]; idx.nodes = [f, p1]
+    check("Mappe viser sange fra sine playlister", idx.tracks(in: f).count == 1)
+    check("Mappe kan ikke flyttes ind i sig selv", !idx.canMove(f.id, under: p1.id) && !idx.canMove(f.id, under: f.id))
+    f.name = "x"; _ = f
+}
+
+section("Musikanalyse (syntetiske numre)")
+do {
+    // Kick på hvert slag + akkorder i en kendt toneart
+    func synth(bpm: Double, root: Int, minor: Bool, seconds: Double = 40, offsetMs: Double = 0) -> [Float] {
+        let n = Int(seconds * sr)
+        var x = [Float](repeating: 0, count: n)
+        let beat = 60 / bpm
+        var i = 0
+        while Double(i) * beat < seconds {
+            let s = Int((Double(i) * beat + offsetMs / 1000) * sr)
+            for k in 0..<Int(0.18 * sr) where s + k < n {
+                let tt = Double(k) / sr
+                x[s + k] += Float(0.9 * sin(2 * .pi * (50 + 80 * exp(-tt * 30)) * tt) * exp(-tt * 12))
+            }
+            i += 1
+        }
+        let degs = [0, 5, 7, 0]
+        let bar = 4 * beat
+        var b = 0
+        while Double(b) * bar < seconds {
+            let r = (root + degs[b % 4]) % 12
+            let third = (minor && degs[b % 4] != 7) ? 3 : 4
+            let s = Int(Double(b) * bar * sr), e = min(n, Int(Double(b + 1) * bar * sr))
+            for iv in [0, third, 7, 12] {
+                let f = 130.81 * pow(2, Double(r + iv) / 12)
+                for k in s..<e { x[k] += Float(0.08 * sin(2 * .pi * f * Double(k) / sr)) }
+            }
+            let fb = 65.41 * pow(2, Double(r) / 12)
+            for k in s..<e { x[k] += Float(0.15 * sin(2 * .pi * fb * Double(k) / sr)) }
+            b += 1
+        }
+        return x
+    }
+    for (bpm, root, minor) in [(124.0, 9, true), (128.0, 2, true), (132.0, 5, false), (174.0, 6, true)] {
+        let url = tmp.appendingPathComponent("music-\(Int(bpm)).wav")
+        try write(synth(bpm: bpm, root: root, minor: minor, offsetMs: 137), to: url, settings: wavSettings)
+        let r = try MusicAnalyzer.analyze(url: url)
+        let want = MusicalKey(pitchClass: root, minor: minor)
+        check("BPM \(Int(bpm))", abs(r.bpm - bpm) < 0.6, "målt \(r.bpm)")
+        check("Toneart \(want.camelot)", r.key == want, "målt \(r.key?.camelot ?? "-")")
+        check("Første slag ≈ 137 ms", abs(r.firstBeatMs - 137) < 30, "målt \(Int(r.firstBeatMs)) ms")
+        check("Waveform 150 kolonner/s", abs(Double(r.bands.count / 3) - r.duration * 150) < 300)
+        check("Energi 1–10", (1...10).contains(r.energy))
+    }
+} catch {
+    check("Musikanalyse kørte", false, error.localizedDescription)
+}
+
 // MARK: - robots.txt
 
 section("robots.txt")

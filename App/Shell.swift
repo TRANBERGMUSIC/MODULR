@@ -6,6 +6,7 @@ import AppKit
 extension Tool {
     var icon: String {
         switch self {
+        case .library: return "square.stack.3d.down.right.fill"
         case .bitrate: return "waveform.badge.magnifyingglass"
         case .findBetter: return "sparkle.magnifyingglass"
         case .artwork: return "photo.stack"
@@ -15,6 +16,7 @@ extension Tool {
 
     var subtitle: String {
         switch self {
+        case .library: return "Al din musik med BPM, toneart, energi og kvalitet – og direkte på USB til CDJ'en"
         case .bitrate: return "Afslør filer der er opkonverteret fra lav bitrate"
         case .findBetter: return "Find sangen gratis i bedre kvalitet fra kunstneren selv"
         case .artwork: return "Covers til rekordbox og CDJ – samlet, gemt og lagt på automatisk"
@@ -41,6 +43,7 @@ struct RootView: View {
                     }
                     Group {
                         switch model.tool {
+                        case .library: LibraryView()
                         case .bitrate: ContentView()
                         case .findBetter: FindBetterToolView()
                         case .artwork: ArtworkToolView()
@@ -136,6 +139,9 @@ struct Sidebar: View {
             return n > 0 ? "\(n)" : nil
         case .findBetter:
             return findBetter.busy || findBetter.watchingDownloads ? "•" : nil
+        case .library:
+            let n = LibraryStore.shared.index.tracks.filter { $0.analyzed && $0.needsUpgrade }.count
+            return n > 0 ? "\(n)" : nil
         default:
             return nil
         }

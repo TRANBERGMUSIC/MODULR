@@ -160,6 +160,7 @@ final class FindBetterModel: ObservableObject {
         do {
             let (report, _) = try await Task.detached { try Analyzer.quality(url: url) }.value
             await MainActor.run { self.original = report }
+            LibraryStore.shared.importFiles([url])
         } catch {
             await fail("Kunne ikke analysere filen: \(error.localizedDescription)")
             return
@@ -522,6 +523,7 @@ final class FindBetterModel: ObservableObject {
         lines.append("Fingerprint: \(comparison.percent) % af sangen matcher din fil")
         lines.append(tagNote)
         lines.append(artNote)
+        LibraryStore.shared.adoptBetterFile(originalPath: original.path, newPath: dest.path)
         let prov = dir.appendingPathComponent(dest.deletingPathExtension().lastPathComponent + ".herkomst.txt")
         try lines.joined(separator: "\n").write(to: prov, atomically: true, encoding: .utf8)
 

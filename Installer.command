@@ -27,7 +27,7 @@ fi
 [ "$MODE" = "install" ] && echo "Bygger appen (tager ca. et minut)..."
 rm -rf "$OUT"
 mkdir -p "$OUT/$APP/Contents/MacOS" "$OUT/$APP/Contents/Resources"
-xcrun swiftc -O -parse-as-library -target "$(uname -m)-apple-macos13.0" \
+xcrun swiftc -O -parse-as-library -target "$(uname -m)-apple-macos14.0" \
   main.swift App/*.swift Core/*.swift -o "$OUT/$APP/Contents/MacOS/MODULR"
 cp Info.plist "$OUT/$APP/Contents/Info.plist"
 
@@ -44,6 +44,7 @@ rm -rf "$ICONSET"
 if [ ! -f logo.png ] && [ -f logo.b64 ]; then base64 -D -i logo.b64 -o logo.png; fi
 [ -f logo.png ] && cp logo.png "$OUT/$APP/Contents/Resources/logo.png"
 [ -f hero.jpg ] && cp hero.jpg "$OUT/$APP/Contents/Resources/hero.jpg"
+cp usb/pioneer_usb.py "$OUT/$APP/Contents/Resources/pioneer_usb.py"
 
 # fpcalc (Chromaprint) til lyd-fingerprints – officiel udgivelse, tjekket med SHA-256
 FPCALC_VERSION="1.6.2"
