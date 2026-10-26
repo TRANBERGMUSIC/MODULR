@@ -1355,6 +1355,20 @@ struct UsbHeader: View {
                 Button("My Settings") { showSettings = true }
                 Button("Skub ud") { usb.ejectSafely(drive) }.disabled(usb.writing.contains(drive.id))
             }
+            if let n = usb.contents[drive.id]?.misplaced, n > 0 {
+                HStack(spacing: 10) {
+                    Image(systemName: "waveform.badge.exclamationmark").foregroundColor(.amber)
+                    Text("\(n) sang\(n == 1 ? "" : "e") fra en ældre MODULR har waveform-filerne et sted, CDJ'en ikke kigger – derfor blå waveform og lang indlæsning.")
+                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Ret nu") { usb.repairAnalysis(drive) }
+                        .buttonStyle(.ember)
+                        .disabled(usb.editing.contains(drive.id) || usb.writing.contains(drive.id))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.amber.opacity(0.10)))
+            }
             if let w = drive.formatWarning {
                 Text("⚠︎ " + w).font(.system(size: 12)).foregroundColor(.amber).fixedSize(horizontal: false, vertical: true)
             }

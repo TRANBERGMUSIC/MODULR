@@ -832,20 +832,49 @@ def is_modulr_anlz(analyze_path, folder):
     return bool(n and n[0] >= 0x800 and not os.path.exists(os.path.join(folder, "ANLZ0000.2EX")))
 
 
+def anlz_hash_path(usb_rel):
+    """Den sti CDJ'en SELV regner ud fra lydfilens sti – spilleren ignorerer analyze_path i databasen.
+    rekordbox' CreateAnlzFileFolderPath (fundet af rhythmbox-to-pioneer-xdj-exporter, PIONEER.md):
+    rullende hash over UTF-16-tegn, modulo 200003, P-mappen er 7 spredte bits af resultatet.
+    Kontrolleret mod alle 138 sange på en rigtig rekordbox-USB (alle passer)."""
+    h = 0
+    for cu in struct.unpack("<%dH" % (len(usb_rel.encode("utf-16-le")) // 2), usb_rel.encode("utf-16-le")):
+        t = (h * 0x5BC9 + cu) & 0xFFFFFFFF
+        h = (t * 0x93B5 + cu) & 0xFFFFFFFF
+    r = h % 200003
+    p = ((r >> 0) & 1) | ((r >> 1) & 2) | ((r >> 4) & 4) | ((r >> 4) & 8) | ((r >> 5) & 0x10) | ((r >> 8) & 0x20) | ((r >> 10) & 0x40)
+    return "/PIONEER/USBANLZ/P%03X/%08X/ANLZ0000.DAT" % (p, r)
+
+
 def new_anlz_path(root, usb_rel, taken):
-    """En analysemappe i samme område som rekordbox bruger (P000–P07F / 00000000–0003FFFF).
-    CDJ'en afviser mapper uden for det område – så kører den sin egen langsomme analyse."""
-    import zlib
-    h = zlib.crc32(usb_rel.encode("utf-8"))
-    p, sub = h & 0x7F, (h >> 7) & 0x3FFFF
-    for _ in range(0x40000):
-        rel = "/PIONEER/USBANLZ/P%03X/%08X/ANLZ0000.DAT" % (p, sub)
-        folder = os.path.join(root, os.path.dirname(rel).lstrip("/"))
-        if rel not in taken and not os.path.exists(folder):
-            taken.add(rel)
-            return rel
-        sub = (sub + 1) & 0x3FFFF
-    raise PdbError("Ingen ledig analysemappe på USB'en")
+    """Analysemappen SKAL ligge hvor CDJ'en forventer den (anlz_hash_path) – ellers ingen waveform/grid/cues.
+    Hvis en ANDEN sang allerede har den mappe (sjældent: hash-kollision), skrives der ikke oven i den."""
+    rel = anlz_hash_path(usb_rel)
+    owner = taken.setdefault("owner", {}).get(rel)
+    if owner not in (None, usb_rel):
+        taken.setdefault("collisions", set()).add(usb_rel)
+        return rel
+    taken.setdefault("paths", set()).add(rel)
+    taken["owner"][rel] = usb_rel
+    return rel
+
+
+def misplaced_anlz(root, db):
+    """MODULR-sange hvis analyse ikke ligger hvor CDJ'en kigger: [(track, gammel mappe, ny analyze_path)]."""
+    out = []
+    for t in db.all(T_TRACKS):
+        ap = t.get("analyze_path") or ""
+        if not ap or not t.get("path"):
+            continue
+        folder = os.path.join(root, os.path.dirname(ap).lstrip("/"))
+        want = anlz_hash_path(t["path"])
+        if ap != want and is_modulr_anlz(ap, folder):
+            out.append((t, folder, want))
+    return out
+
+
+def anlz_collides(taken, usb_rel):
+    return usb_rel in taken.get("collisions", set())
 
 
 def write_anlz(folder, usb_path, analysis):
@@ -916,7 +945,8 @@ def read_usb(root):
                                                     key=lambda e: e["index"])]
     has_onelibrary = os.path.exists(os.path.join(root, "PIONEER", "rekordbox", "exportLibrary.db")) or \
         os.path.exists(os.path.join(root, "PIONEER", "rekordbox", "OneLibrary"))
-    return {"ok": True, "tracks": tracks, "nodes": nodes, "onelibrary": has_onelibrary}
+    return {"ok": True, "tracks": tracks, "nodes": nodes, "onelibrary": has_onelibrary,
+            "misplaced": len(misplaced_anlz(root, db))}
 
 
 def safe_name(s, fallback):
@@ -1003,6 +1033,22 @@ def edit_usb(root, plan):
                 db.add_playlist_entry(pid, tid)
         touched.add(pid)
 
+    moved = set()
+    move_files = []          # (gammel mappe, ny mappe)
+    if plan.get("repair"):
+        owners = {t.get("analyze_path"): t["path"] for t in db.all(T_TRACKS)}
+        for t, old_folder, want in misplaced_anlz(root, db):
+            if t["id"] in delete:
+                continue
+            new_folder = os.path.join(root, os.path.dirname(want).lstrip("/"))
+            if owners.get(want) not in (None, t["path"]) or (os.path.exists(new_folder) and not is_modulr_anlz(want, new_folder)):
+                log.append("⚠︎ Kan ikke flytte (mappen bruges af en anden sang): " + t["title"])
+                continue
+            if db.set_analyze_path(t["id"], want):
+                moved.add(t["id"])
+                move_files.append((old_folder, new_folder))
+                log.append("Waveform-filer flyttet derhen hvor CDJ'en kigger: " + t["title"])
+
     for pid in touched:
         db.renumber_playlist(pid)
     for op in plan.get("order", []):
@@ -1012,9 +1058,13 @@ def edit_usb(root, plan):
 
     # Kontrol: kun det vi bad om må være forsvundet – alt andet skal stå uændret
     check = Pdb(bytes(db.data))
+    def strip_moved(rows):
+        return [{k: v for k, v in r.items() if not (k == "analyze_path" and r["id"] in moved)} for r in rows]
     for t in (T_TRACKS, T_ARTISTS, T_ALBUMS, T_KEYS, T_PLAYLIST_TREE, T_ARTWORK, T_GENRES):
         before = [r for r in old.all(t) if not (t == T_TRACKS and r["id"] in delete)]
         after = check.all(t)
+        if t == T_TRACKS and moved:
+            before, after = strip_moved(before), strip_moved(after)
         if any(b not in after for b in before):
             raise PdbError("Kontrol fejlede for tabel %d – intet er ændret på USB'en" % t)
     def key(e):
@@ -1027,8 +1077,15 @@ def edit_usb(root, plan):
     if any(t in delete for _pl, t in after):
         raise PdbError("Kontrol fejlede: en slettet sang står stadig i en playliste – intet er ændret")
 
+    # Analysefilerne kopieres på plads FØR databasen gemmes (så de findes, når CDJ'en kigger)
+    for src, dst in move_files:
+        os.makedirs(dst, exist_ok=True)
+        for name in os.listdir(src):
+            shutil.copy2(os.path.join(src, name), os.path.join(dst, name))
     backup = _backup(root)
     _save_atomic(p, db.data)
+    for src, _dst in move_files:
+        shutil.rmtree(src, ignore_errors=True)
     # Filerne slettes først, når databasen er gemt
     for f in files_to_remove:
         try:
@@ -1063,7 +1120,7 @@ def write_usb(root, plan):
     copied = {}            # kilde-sti -> track-id
     existing_by_path = {t["path"]: t["id"] for t in db.all(T_TRACKS)}
     anlz_by_path = {t["path"]: t.get("analyze_path", "") for t in db.all(T_TRACKS)}
-    taken_anlz = set(anlz_by_path.values())
+    taken_anlz = {"paths": set(anlz_by_path.values()), "owner": {v: k for k, v in anlz_by_path.items()}}
     moved_anlz = set()      # spor hvis analysemappe er flyttet ind i rekordbox' område
     contents = os.path.join(root, "Contents")
     log = []
@@ -1085,10 +1142,12 @@ def write_usb(root, plan):
             folder = os.path.join(root, os.path.dirname(ap).lstrip("/")) if ap else ""
             if is_modulr_anlz(ap, folder) and tr.get("analysis"):
                 tr["analysis"].setdefault("sample_rate", tr.get("sample_rate") or 44100)
-                n = anlz_folder_number(ap)
-                if n and n[0] >= 0x80:
-                    # Lagt på af en ældre MODULR i en mappe CDJ'en ikke læser → flyt til rekordbox' område
+                if ap != anlz_hash_path(usb_rel):
+                    # Lagt på af en ældre MODULR i en mappe CDJ'en ikke kigger i → flyt derhen hvor den kigger
                     rel = new_anlz_path(root, usb_rel, taken_anlz)
+                    if anlz_collides(taken_anlz, usb_rel):
+                        log.append("⚠︎ Analysemappen deles med en anden sang – waveform springes over: " + usb_rel)
+                        return copied[src]
                     if db.set_analyze_path(copied[src], rel):
                         moved_anlz.add(copied[src])
                         ap = rel
@@ -1120,7 +1179,10 @@ def write_usb(root, plan):
         anlz_rel = new_anlz_path(root, usb_rel, taken_anlz)
         an = dict(tr.get("analysis") or {"bpm": tr.get("bpm"), "duration": tr.get("duration")})
         an.setdefault("sample_rate", tr.get("sample_rate") or 44100)
-        write_anlz(os.path.join(root, os.path.dirname(anlz_rel).lstrip("/")), usb_rel, an)
+        if anlz_collides(taken_anlz, usb_rel):
+            log.append("⚠︎ Analysemappen deles med en anden sang – waveform springes over: " + usb_rel)
+        else:
+            write_anlz(os.path.join(root, os.path.dirname(anlz_rel).lstrip("/")), usb_rel, an)
         tid = db.add_track({
             "title": tr.get("title") or os.path.splitext(fname)[0], "artist_id": artist_id, "album_id": album_id,
             "genre_id": genre_id, "key_id": key_id, "artwork_id": artwork_id, "bpm": tr.get("bpm") or 0,
@@ -1141,6 +1203,20 @@ def write_usb(root, plan):
         if isinstance(v, str):
             return keymap[v]
         return int(v or 0)
+
+    # Ret MODULR-sange fra ældre versioner, hvis analyse ligger forkert (uden at du skal sende dem igen)
+    for t, old_folder, want in misplaced_anlz(root, db):
+        new_folder = os.path.join(root, os.path.dirname(want).lstrip("/"))
+        if taken_anlz["owner"].get(want) not in (None, t["path"]) or os.path.exists(new_folder):
+            continue
+        os.makedirs(new_folder, exist_ok=True)
+        for name in os.listdir(old_folder):
+            shutil.copy2(os.path.join(old_folder, name), os.path.join(new_folder, name))
+        if db.set_analyze_path(t["id"], want):
+            moved_anlz.add(t["id"])
+            taken_anlz["owner"][want] = t["path"]
+            anlz_by_path[t["path"]] = want
+            log.append("Waveform-filer flyttet derhen hvor CDJ'en kigger: " + t["title"])
 
     for fo in plan.get("folders", []):
         keymap[fo["key"]] = db.add_playlist_node(fo["name"], resolve_parent(fo.get("parent")), True)

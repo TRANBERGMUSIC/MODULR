@@ -48,11 +48,21 @@ Kontrol: hver fil parses med rekordcrate efter skrivning i testene, og sammenlig
 
 ## Rettelser til referencedokumentet
 
-1. **Mappenavnet under USBANLZ er IKKE vilkårligt i praksis.** Alle 138 rekordbox-sange ligger i `P000`–`P07F` / `00000000`–`0003FFFF`.
-   MODULR lagde sine i `P800`, og CDJ'en kørte sin egen langsomme analyse (blå waveform, 130.2 i stedet for 130.0 BPM).
-   MODULR bruger nu kun rekordbox' område (CRC32 af stien, ledig plads søges) og flytter gamle `P800`-mapper ved næste afsendelse.
+1. **Mappenavnet under USBANLZ er IKKE vilkårligt – CDJ'en regner det selv ud fra filstien og ignorerer `analyze_path`.**
+   rekordbox' `CreateAnlzFileFolderPath` (fundet af rhythmbox-to-pioneer-xdj-exporter, PIONEER.md):
+   ```
+   h = 0; for hver UTF-16-enhed c i "/Contents/…":  h = ((h*0x5BC9 + c) * 0x93B5 + c) mod 2^32
+   r = h mod 200003
+   P = bit0 | bit2→1 | bit6→2 | bit7→3 | bit9→4 | bit13→5 | bit16→6   (af r)
+   sti = /PIONEER/USBANLZ/P%03X/%08X/ANLZ0000.DAT  (P, r)
+   ```
+   Kontrolleret: alle 138 rekordbox-sange på KNOWN MUSIC (også med æøå) passer præcist.
+   MODULRs sang lå i `P800/…` og senere `P02C/00039FAE`, men CDJ'en kiggede i `P026/0000F176` → ingen analyse,
+   spilleren kørte sin egen (blå waveform, lang indlæsning, 130.2 i stedet for 130.0 BPM).
+   MODULR bruger nu formlen (`anlz_hash_path`) og flytter ældre MODULR-analyser automatisk ("Ret nu" / ved næste skrivning).
+   Hash-kollision (to sange, samme mappe) er sjælden; så skrives der ikke oven i den anden sangs analyse.
 2. **Waveform-farven (BLUE/RGB/3Band) ligger i `DEVSETTING.DAT`, ikke `MYSETTING2.DAT`.** Standard er BLUE.
-   `DEVSETTING.DAT` er fuldt kendt (32 bytes) og kan skrives sikkert.
+   `DEVSETTING.DAT` er fuldt kendt (32 bytes) og kan skrives sikkert. (KNOWN MUSIC stod allerede på RGB – det var ikke årsagen.)
 3. **CRC16-XMODEM:** over data-delen – men for `DJMMYSETTING.DAT` over ALT før checksummen.
 4. **PVBR** er ikke tom for MP3: sidste felt = antal samples.
 5. **Farverne i PWV5** skal være normaliserede farver, ikke rå båndenergi (ellers næsten sort).
@@ -84,5 +94,6 @@ Kontrol: alle 82 rigtige rekordbox-indstillingsfiler i rekordcrates testdata læ
 ## Kilder
 
 - Deep Symmetry: Analysis Files og Export Structure (djl-analysis.deepsymmetry.org)
+- rhythmbox-to-pioneer-xdj-exporter `PIONEER.md` (ANLZ-sti-hash), openboxxx `docs/research-findings.md`
 - rekordcrate (`src/anlz.rs`, `src/setting.rs`, `src/pdb`), beat-link (`CueList.java`, `WaveformPreview.java`)
 - AlphaTheta: CDJ-3000 firmware 3.22 (support.alphatheta.com) og notits om 3.30 (pioneerdj.com, 7/1-2026)

@@ -92,6 +92,7 @@ struct UsbContents: Codable {
     let tracks: [UsbTrackInfo]?
     let nodes: [UsbNodeInfo]?
     let onelibrary: Bool?
+    var misplaced: Int? = nil       // MODULR-sange hvis analyse ligger et sted CDJ'en ikke kigger
 }
 
 /// Ændringer der venter på at blive skrevet til USB'en.
@@ -461,6 +462,12 @@ final class UsbStore: ObservableObject {
 
     func reorder(_ d: UsbDrive, playlist: Int, order: [Int]) {
         edit(d, ["order": [["playlist": playlist, "tracks": order]]], done: "Rækkefølgen er gemt på USB'en.")
+    }
+
+    /// Flyt MODULRs analysefiler derhen hvor CDJ'en selv kigger (beregnet ud fra filstien).
+    func repairAnalysis(_ d: UsbDrive) {
+        let n = contents[d.id]?.misplaced ?? 0
+        edit(d, ["repair": true], done: "✅ \(n) sang\(n == 1 ? "" : "e") har nu waveform, grid og cues dér hvor CDJ'en kigger.")
     }
 
     func deleteTracks(_ d: UsbDrive, tracks: [Int]) {
