@@ -77,18 +77,8 @@ struct PlayerPanel: View {
             .buttonStyle(.plain)
             .disabled(t == nil)
             .help("Forrige sang (eller starten af sangen)")
-            Button {
-                player.toggle()
-            } label: {
-                Image(systemName: player.playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.void)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(Color.ember))
-            }
-            .buttonStyle(.plain)
-            .disabled(t == nil)
-            .help("Afspil/pause (mellemrum)")
+            CDJButtons()
+                .disabled(t == nil)
             Button { player.next() } label: {
                 Image(systemName: "forward.fill").font(.system(size: 12, weight: .bold)).foregroundColor(.mist.opacity(0.8))
                     .frame(width: 26, height: 26)
@@ -96,6 +86,60 @@ struct PlayerPanel: View {
             .buttonStyle(.plain)
             .disabled(t == nil)
             .help("Næste sang")
+        }
+    }
+}
+
+// MARK: - CUE og PLAY som på en CDJ
+
+/// Orange CUE og grøn PLAY/PAUSE. CUE reagerer på tryk og slip (hold = preview), som på en CDJ.
+struct CDJButtons: View {
+    @ObservedObject private var player = PlayerModel.shared
+    @State private var cueDown = false
+    @State private var blink = false
+    static let cueOrange = Color(red: 1, green: 0.55, blue: 0.1)
+    static let playGreen = Color(red: 0.25, green: 0.85, blue: 0.35)
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // CUE: lyser på cue-punktet, blinker når du står stille et andet sted
+            let cueLit: Bool = player.atCue || player.cuePreviewing || cueDown
+            let cueBlink: Bool = !player.playing && !player.atCue
+            ZStack {
+                Circle().fill(Color(white: 0.1))
+                Circle().stroke(CDJButtons.cueOrange.opacity(cueLit || (cueBlink && blink) ? 1 : 0.35), lineWidth: 3)
+                Text("CUE").font(.system(size: 11, weight: .heavy))
+                    .foregroundColor(cueLit || (cueBlink && blink) ? CDJButtons.cueOrange : CDJButtons.cueOrange.opacity(0.5))
+            }
+            .frame(width: 40, height: 40)
+            .contentShape(Circle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !cueDown { cueDown = true; player.cueDown() }
+                }
+                .onEnded { _ in
+                    cueDown = false
+                    player.cueUp()
+                })
+            .help("CUE (tast C): under afspilning tilbage til cue-punktet. Stoppet: sæt cue her – hold for at lytte.")
+            // PLAY/PAUSE: lyser når den spiller, blinker når den står stille
+            Button { player.playPause() } label: {
+                ZStack {
+                    Circle().fill(Color(white: 0.1))
+                    Circle().stroke(CDJButtons.playGreen.opacity(player.playing || blink ? 1 : 0.35), lineWidth: 3)
+                    HStack(spacing: 1) {
+                        Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                        Image(systemName: "pause.fill").font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundColor(player.playing || blink ? CDJButtons.playGreen : CDJButtons.playGreen.opacity(0.5))
+                }
+                .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+            .help("Play/pause (mellemrum)")
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { blink = true }
         }
     }
 }
@@ -255,7 +299,7 @@ struct DetailWaveform: View {
                 if amp < 1 { continue }
                 // Farven er gennemsnittet over ca. 50 ms (eller pixlens tidsrum), så den ikke flimrer i striber
                 let tm = (ta + tb) / 2
-                let half = max(0.025, (tb - ta) / 2)
+                let half = max(0.012, (tb - ta) / 2)
                 let ca = max(0, Int((tm - half) * rate)), cb = max(ca + 1, Int((tm + half) * rate) + 1)
                 var lo = 0.0, mi = 0.0, hi = 0.0
                 let bcols = bands.count / 3
@@ -265,7 +309,7 @@ struct DetailWaveform: View {
                         lo += Double(bands[c * 3]); mi += Double(bands[c * 3 + 1]); hi += Double(bands[c * 3 + 2])
                     }
                 }
-                guard let c = WaveColor.rgb(lo, mi, hi, floor: 0.1) else { continue }
+                guard let c = WaveColor.rgb(lo, mi, hi, floor: 0.1, boost: true) else { continue }
                 // Farverne samles i spande, så hele waveformen tegnes med få fyld-kald
                 let q = levels - 1
                 let key = Int((c.r * q).rounded()) * 10000 + Int((c.g * q).rounded()) * 100 + Int((c.b * q).rounded())
@@ -317,20 +361,38 @@ struct DetailWaveform: View {
             }
         }
 
-        // 3) Dine markører (cues)
-        for (i, cue) in (track.cues ?? []).enumerated() where cue >= t0 && cue <= t0 + zoom {
+        // 3) Memory cues: rød trekant øverst (som rekordbox)
+        for cue in (track.cues ?? []) where cue >= t0 && cue <= t0 + zoom {
             let x = (cue - t0) / secsPerPx
-            let amber = Color(red: 1, green: 0.62, blue: 0.2)
-            ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: h)), with: .color(amber))
             var tri = Path()
-            tri.move(to: CGPoint(x: x - 4, y: h))
-            tri.addLine(to: CGPoint(x: x + 4, y: h))
-            tri.addLine(to: CGPoint(x: x, y: h - 6))
+            tri.move(to: CGPoint(x: x - 5, y: 0))
+            tri.addLine(to: CGPoint(x: x + 5, y: 0))
+            tri.addLine(to: CGPoint(x: x, y: 8))
             tri.closeSubpath()
-            ctx.fill(tri, with: .color(amber))
-            let letter = String(UnicodeScalar(UInt8(65 + i % 26)))
-            ctx.draw(Text(letter).font(.system(size: 11, weight: .bold)).foregroundColor(amber),
-                     at: CGPoint(x: x + 5, y: 22), anchor: .leading)
+            ctx.fill(tri, with: .color(Color(red: 0.9, green: 0.2, blue: 0.2)))
+        }
+
+        // Hot cues A–H: farvet streg med bogstav-mærke øverst (som rekordbox)
+        for (letter, at) in (track.hotCues ?? [:]) where at >= t0 && at <= t0 + zoom {
+            let x = (at - t0) / secsPerPx
+            let c = HotCue.rgb[letter] ?? (1, 1, 1)
+            let color = Color(red: c.0, green: c.1, blue: c.2)
+            ctx.fill(Path(CGRect(x: x - 0.75, y: 0, width: 1.5, height: h)), with: .color(color))
+            let tag = Path(roundedRect: CGRect(x: x, y: 2, width: 15, height: 15), cornerRadius: 3)
+            ctx.fill(tag, with: .color(color))
+            ctx.draw(Text(letter).font(.system(size: 11, weight: .heavy)).foregroundColor(.black),
+                     at: CGPoint(x: x + 7.5, y: 9.5), anchor: .center)
+        }
+
+        // Cue-punktet (CUE-knappen): orange trekant nederst
+        if player.cuePoint >= t0 && player.cuePoint <= t0 + zoom {
+            let x = (player.cuePoint - t0) / secsPerPx
+            var tri = Path()
+            tri.move(to: CGPoint(x: x - 6, y: h))
+            tri.addLine(to: CGPoint(x: x + 6, y: h))
+            tri.addLine(to: CGPoint(x: x, y: h - 9))
+            tri.closeSubpath()
+            ctx.fill(tri, with: .color(CDJButtons.cueOrange))
         }
 
         // 4) Afspilningshoved i midten
@@ -367,13 +429,22 @@ struct OverviewWaveform: View {
                         .frame(width: zw)
                         .offset(x: zx)
                 }
+                // Memory cues: små røde trekanter nederst
                 ForEach(Array((track.cues ?? []).enumerated()), id: \.offset) { item in
                     let x: CGFloat = w * CGFloat(item.element / dur)
-                    Text(String(UnicodeScalar(UInt8(65 + item.offset % 26))))
-                        .font(.system(size: 9, weight: .bold)).foregroundColor(.void)
+                    Image(systemName: "triangle.fill").font(.system(size: 7))
+                        .foregroundColor(Color(red: 0.9, green: 0.2, blue: 0.2))
+                        .offset(x: x - 3.5, y: 11)
+                }
+                // Hot cues A–H: farvede bogstav-mærker øverst (som rekordbox' preview)
+                ForEach(HotCue.letters.filter { track.hotCues?[$0] != nil }, id: \.self) { letter in
+                    let at: Double = track.hotCues?[letter] ?? 0
+                    let c = HotCue.rgb[letter] ?? (1, 1, 1)
+                    Text(letter)
+                        .font(.system(size: 9, weight: .heavy)).foregroundColor(.black)
                         .frame(width: 11, height: 11)
-                        .background(RoundedRectangle(cornerRadius: 2).fill(Color(red: 1, green: 0.62, blue: 0.2)))
-                        .offset(x: x - 5.5, y: 0)
+                        .background(RoundedRectangle(cornerRadius: 2).fill(Color(red: c.0, green: c.1, blue: c.2)))
+                        .offset(x: w * CGFloat(at / dur) - 5.5, y: -9)
                 }
                 Rectangle().fill(Color.white).frame(width: 2).offset(x: w * frac - 1)
                 if hover {
@@ -614,50 +685,78 @@ struct GridEditBar: View {
     }
 }
 
-// MARK: - Cues (markører)
+// MARK: - Cues: hot cues A–H og memory cues (som rekordbox' CUE/LOOP-panel)
 
 struct CueTools: View {
     @ObservedObject private var player = PlayerModel.shared
     let track: LibTrack
 
-    var cues: [Double] { track.cues ?? [] }
+    var memory: [Double] { track.cues ?? [] }
 
     var body: some View {
         HStack(spacing: 6) {
-            Button {
-                LibraryStore.shared.addCue(track.id, at: snapped(player.position))
-            } label: { Label("Cue her", systemImage: "flag.fill") }
-                .buttonStyle(.ember)
-                .help("Sætter en cue på nærmeste slag – fx hvor du vil mixe ind eller ud")
-            Button {
-                if let c = cues.last(where: { $0 < player.position - 0.2 }) { player.seek(seconds: c) }
-            } label: { Image(systemName: "backward.end.fill") }
-                .buttonStyle(.ghost)
-            Button {
-                if let c = cues.first(where: { $0 > player.position + 0.2 }) { player.seek(seconds: c) }
-            } label: { Image(systemName: "forward.end.fill") }
-                .buttonStyle(.ghost)
-            Button("Fjern nærmeste") {
-                LibraryStore.shared.removeCue(track.id, near: player.position, tolerance: 4)
+            ForEach(HotCue.letters, id: \.self) { letter in
+                hotCueButton(letter)
             }
-            .buttonStyle(.ghost)
-            .disabled(cues.isEmpty)
+            Divider().frame(height: 26).padding(.horizontal, 4)
+            Button("MEMORY") {
+                LibraryStore.shared.addCue(track.id, at: player.quantized(player.position))
+            }
+            .buttonStyle(CueToolStyle())
+            .help("Gem en memory cue ved afspilningshovedet (på nærmeste slag)")
+            Button { if let c = memory.last(where: { $0 < player.position - 0.2 }) { player.seek(seconds: c) } } label: {
+                Image(systemName: "arrowtriangle.left.fill")
+            }
+            .buttonStyle(CueToolStyle())
+            .help("Forrige memory cue")
+            Button { if let c = memory.first(where: { $0 > player.position + 0.2 }) { player.seek(seconds: c) } } label: {
+                Image(systemName: "arrowtriangle.right.fill")
+            }
+            .buttonStyle(CueToolStyle())
+            .help("Næste memory cue")
+            Button { LibraryStore.shared.removeCue(track.id, near: player.position, tolerance: 4) } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(CueToolStyle())
+            .disabled(memory.isEmpty)
+            .help("Slet nærmeste memory cue")
             Spacer(minLength: 0)
-            if let next = cues.first(where: { $0 > player.position + 0.05 }), let bpm = track.bpm, bpm > 0 {
-                let beats = Int(((next - player.position) / (60 / bpm)).rounded())
-                Text("Næste cue om \(beats / 4) takter \(beats % 4) slag")
-                    .font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundColor(Color(red: 1, green: 0.62, blue: 0.2))
-            } else {
-                Text("\(cues.count) cues").font(.system(size: 12)).foregroundColor(.mist.opacity(0.6))
-            }
         }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
     }
 
-    func snapped(_ t: Double) -> Double {
-        guard let bpm = track.bpm, bpm > 0 else { return t }
-        let beat = 60 / bpm
-        let fb = (track.firstBeatMs ?? 0) / 1000
-        return max(0, fb + ((t - fb) / beat).rounded() * beat)
+    func hotCueButton(_ letter: String) -> some View {
+        let set: Bool = track.hotCues?[letter] != nil
+        let c = HotCue.rgb[letter] ?? (1, 1, 1)
+        let color = Color(red: c.0, green: c.1, blue: c.2)
+        return Button {
+            let shift = NSEvent.modifierFlags.contains(.shift)
+            player.hotCue(letter, delete: shift)
+        } label: {
+            Text(letter)
+                .font(.system(size: 13, weight: .heavy))
+                .foregroundColor(set ? .black : color)
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: 5).fill(set ? color : Color.black.opacity(0.55)))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(color.opacity(set ? 0 : 0.8), lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .help(set ? "Hot cue \(letter): hop dertil · shift-klik sletter" : "Hot cue \(letter): sæt ved afspilningshovedet")
+        .modMenu(title: "Hot cue \(letter)") {
+            set ? [MMItem.action("Slet hot cue \(letter)", icon: "trash", destructive: true) { PlayerModel.shared.hotCue(letter, delete: true) }] : []
+        }
+    }
+}
+
+struct CueToolStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .bold))
+            .foregroundColor(.mist.opacity(0.9))
+            .frame(minWidth: 30, minHeight: 30)
+            .padding(.horizontal, 6)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(configuration.isPressed ? 0.16 : 0.08)))
     }
 }
 

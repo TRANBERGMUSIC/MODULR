@@ -696,6 +696,15 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    /// Hot cue A–H: sæt (sekunder) eller slet (nil).
+    func setHotCue(_ id: UUID, _ letter: String, at seconds: Double?) {
+        update(id) {
+            var h = $0.hotCues ?? [:]
+            h[letter] = seconds
+            $0.hotCues = h.isEmpty ? nil : h
+        }
+    }
+
     func addCue(_ id: UUID, at seconds: Double) {
         update(id) {
             var c = $0.cues ?? []
@@ -944,14 +953,14 @@ final class WaveformCache {
     private let cache = NSCache<NSString, CGImage>()
 
     func invalidate(_ id: UUID) {
-        for w in [120, 192, 600, 1200, 2400] { cache.removeObject(forKey: "\(id.uuidString)-\(w)" as NSString) }
+        for w in [120, 192, 600, 1200, 2400, 4800] { cache.removeObject(forKey: "\(id.uuidString)-\(w)" as NSString) }
     }
 
     /// RGB-waveform som i rekordbox: tegnes nedefra; farven via WaveColor (bas rød, mellem grøn, diskant blå).
     func image(for t: LibTrack, width: Int, height: Int, store: LibraryStore) -> CGImage? {
         let key = "\(t.id.uuidString)-\(width)" as NSString
         if let img = cache.object(forKey: key) { return img }
-        guard let img = WaveformCache.render(bands: store.bands(t), width: width, height: height) else { return nil }
+        guard let img = WaveShape.preview(bands: store.bands(t), peaks: store.peaks(t), width: width, height: height) else { return nil }
         cache.setObject(img, forKey: key)
         return img
     }

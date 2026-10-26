@@ -114,6 +114,7 @@ final class PlayerModel: ObservableObject {
     private var tapInstalled = false
 
     private var keyMonitor: Any?
+    private var keyUpMonitor: Any?
 
     init() {
         engine.attach(node)
@@ -121,13 +122,21 @@ final class PlayerModel: ObservableObject {
         EQSettings().configure(eqUnit)
         engine.mainMixerNode.outputVolume = Float(volume)
         setupRemoteCommands()
+        keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] e in
+            if e.keyCode == 8, let self, self.cuePreviewing { self.cueUp(); return nil }
+            return e
+        }
         // Mellemrum = afspil/pause (men ikke når du skriver i et tekstfelt eller en dialog er åben)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, e.keyCode == 49,
+            guard let self, e.keyCode == 49 || e.keyCode == 8,
                   e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return e }
             if let r = NSApp.keyWindow?.firstResponder, r is NSText || r is NSTextView { return e }
             if Dialogs.shared.current != nil || self.track == nil { return e }
-            self.toggle()
+            if e.keyCode == 49 {
+                self.playPause()
+            } else if !e.isARepeat {
+                self.cueDown()              // C = CUE (hold for preview)
+            }
             return nil
         }
     }
@@ -231,6 +240,8 @@ final class PlayerModel: ObservableObject {
         holdDB = -80
         startFrame = 0
         position = 0
+        cuePreviewing = false
+        cuePoint = autoCue(for: t)
         guard let f = try? AVAudioFile(forReading: t.url) else {
             file = nil
             duration = t.duration ?? 0
@@ -240,7 +251,7 @@ final class PlayerModel: ObservableObject {
         sampleRate = f.processingFormat.sampleRate
         duration = Double(f.length) / sampleRate
         connect(format: f.processingFormat)
-        if autoplay { play() }
+        if autoplay { play() } else if cuePoint > 0 { seek(seconds: cuePoint) }
     }
 
     /// Sange uden waveform (fx direkte fra USB): analysér i baggrunden, så de også får waveform.
@@ -256,7 +267,7 @@ final class PlayerModel: ObservableObject {
                 guard let r = result else { return }
                 self.bands = r.bands
                 self.peaks = r.peaks
-                self.externalOverview = WaveformCache.render(bands: r.bands, width: 2400, height: 80)
+                self.externalOverview = WaveShape.preview(bands: r.bands, peaks: r.peaks, width: 2400, height: 80)
                 if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
                     self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
                     self.track?.firstBeatMs = r.firstBeatMs
@@ -344,6 +355,83 @@ final class PlayerModel: ObservableObject {
     }
 
     func toggle() { playing ? pause() : play() }
+
+    // MARK: CUE og PLAY som på en CDJ (rekordbox' CDJ-mode)
+
+    /// Cue-punktet (ikke en del af A–H). Sættes automatisk på første slag, når en sang indlæses.
+    @Published var cuePoint: Double = 0
+    @Published private(set) var cuePreviewing = false
+    var atCue: Bool { abs(position - cuePoint) < 0.02 }
+
+    /// Første slag efter 0 s – CDJ'ens "auto cue".
+    func autoCue(for t: LibTrack) -> Double {
+        guard let bpm = t.bpm, bpm > 0 else { return 0 }
+        let beat = 60 / bpm
+        let fb = (t.firstBeatMs ?? 0) / 1000
+        return max(0, fb - floor(fb / beat) * beat)
+    }
+
+    /// Nærmeste slag (quantize, som Q på en CDJ).
+    func quantized(_ t: Double) -> Double {
+        guard let tr = liveTrack, let bpm = tr.bpm, bpm > 0 else { return t }
+        let beat = 60 / bpm
+        let fb = (tr.firstBeatMs ?? 0) / 1000
+        return max(0, fb + ((t - fb) / beat).rounded() * beat)
+    }
+
+    /// CUE trykkes ned:
+    /// spiller → tilbage til cue-punktet og stop; stoppet et andet sted → nyt cue-punkt her;
+    /// stoppet på cue-punktet → afspil så længe knappen holdes (cue-preview).
+    func cueDown() {
+        guard track != nil else { return }
+        if playing && !cuePreviewing {
+            pause()
+            seek(seconds: cuePoint)
+            return
+        }
+        if !playing {
+            if !atCue {
+                cuePoint = quantized(position)
+                seek(seconds: cuePoint)
+            } else {
+                cuePreviewing = true
+                play()
+            }
+        }
+    }
+
+    /// CUE slippes: under preview → tilbage til cue-punktet og stop.
+    func cueUp() {
+        guard cuePreviewing else { return }
+        cuePreviewing = false
+        pause()
+        seek(seconds: cuePoint)
+    }
+
+    /// PLAY/PAUSE: under cue-preview fortsætter afspilningen (som at trykke PLAY mens CUE holdes).
+    func playPause() {
+        if cuePreviewing {
+            cuePreviewing = false
+            return
+        }
+        toggle()
+    }
+
+    /// Hot cue A–H: tom → sæt her (på nærmeste slag); sat → hop dertil (og afspil, hvis stoppet).
+    func hotCue(_ letter: String, delete: Bool = false) {
+        guard let t = liveTrack else { return }
+        let existing = t.hotCues?[letter]
+        if delete {
+            LibraryStore.shared.setHotCue(t.id, letter, at: nil)
+            return
+        }
+        if let at = existing {
+            seek(seconds: at)
+            if !playing { play() }
+        } else {
+            LibraryStore.shared.setHotCue(t.id, letter, at: quantized(position))
+        }
+    }
 
     func seek(_ fraction: Double) { seek(seconds: fraction * duration) }
 

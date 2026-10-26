@@ -108,6 +108,54 @@ enum WaveShape {
         return Gradient(stops: stops)
     }
 
+    /// Hele sangen som rekordbox' preview: tegnet nedefra, én pixel-søjle ad gangen med den højeste top
+    /// i søjlen (ingen udglatning – spidst og detaljeret) og mættede farver fra frekvensbåndene.
+    static func preview(bands: [UInt8], peaks: [UInt8], width: Int, height: Int) -> CGImage? {
+        let cols = bands.count / 3
+        guard cols > 1, width > 1, height > 1 else { return nil }
+        let duration = Double(cols) / MusicAnalyzer.waveformRate
+        let pcount = peaks.count
+        var px = [UInt8](repeating: 0, count: width * height * 4)
+        for x in 0..<width {
+            let ta = Double(x) / Double(width) * duration
+            let tb = Double(x + 1) / Double(width) * duration
+            // Højde: største top i søjlen
+            var amp = 0.0
+            if pcount > 0 {
+                let a = max(0, Int(ta * MusicAnalyzer.peakRate))
+                let b = min(pcount, max(a + 1, Int(tb * MusicAnalyzer.peakRate)))
+                if a < pcount { for k in a..<b { amp = max(amp, Double(peaks[k])) } }
+            }
+            // Farve: gennemsnit af båndene i søjlen
+            let ca = max(0, Int(ta * MusicAnalyzer.waveformRate))
+            let cb = min(cols, max(ca + 1, Int(tb * MusicAnalyzer.waveformRate)))
+            var lo = 0.0, mi = 0.0, hi = 0.0, top = 0.0
+            if ca < cols {
+                for c in ca..<cb {
+                    lo += Double(bands[c * 3]); mi += Double(bands[c * 3 + 1]); hi += Double(bands[c * 3 + 2])
+                    top = max(top, Double(max(bands[c * 3], max(bands[c * 3 + 1], bands[c * 3 + 2]))))
+                }
+            }
+            if pcount == 0 { amp = top }
+            guard amp > 1, let c = WaveColor.rgb(lo, mi, hi, floor: 0.18, boost: true) else { continue }
+            let h = max(1, Int((amp / 255 * Double(height)).rounded()))
+            for yy in 0..<min(h, height) {
+                // Lidt lysere top, mørkere bund – giver dybde som i rekordbox
+                let shade = 0.78 + 0.22 * Double(yy) / Double(max(1, h))
+                let i = ((height - 1 - yy) * width + x) * 4
+                px[i] = UInt8(min(255, c.r * shade * 255))
+                px[i + 1] = UInt8(min(255, c.g * shade * 255))
+                px[i + 2] = UInt8(min(255, c.b * shade * 255))
+                px[i + 3] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(px) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
     /// Hele sangen som billede, tegnet nedefra (overblik og tabel) – kantudglattet med glidende farver.
     static func image(bands: [UInt8], width: Int, height: Int) -> CGImage? {
         let cols = bands.count / 3

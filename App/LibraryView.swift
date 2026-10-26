@@ -686,14 +686,14 @@ struct TrackListView: View {
                          targeted: targeted)
             } else {
                 Table(of: LibTrack.self, selection: $ui.tableSelection, sortOrder: $sortOrder) {
-                    TableColumn("") { (t: LibTrack) in WaveCell(track: t) }
-                        .width(84)
+                    TableColumn("Preview") { (t: LibTrack) in WaveCell(track: t) }
+                        .width(min: 110, ideal: 200, max: 420)
                     TableColumn("") { (t: LibTrack) in Cover(track: t, size: 26) }
                         .width(30)
                     TableColumn("Kunstner", value: \LibTrack.artist) { (t: LibTrack) in ArtistCell(track: t) }
-                        .width(min: 70, ideal: 130)
+                        .width(min: 70, ideal: 110)
                     TableColumn("Titel", value: \LibTrack.title) { (t: LibTrack) in TitleCell(track: t) }
-                        .width(min: 110, ideal: 220)
+                        .width(min: 110, ideal: 180)
                     TableColumn("Key", value: \LibTrack.sortKey) { (t: LibTrack) in KeyCell(track: t) }
                         .width(78)
                     TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
@@ -873,7 +873,28 @@ struct WaveCell: View {
                 player.seek(f)
             })
         }
-        .frame(width: 76, height: 26)
+        .frame(height: 24)
+        .overlay(alignment: .topLeading) { HotCueTags(track: track) }
+    }
+}
+
+/// Hot cues A–H som små farvede bogstaver oven på tabellens preview (som rekordbox).
+struct HotCueTags: View {
+    let track: LibTrack
+    var body: some View {
+        GeometryReader { g in
+            let dur: Double = max(0.001, track.duration ?? 0)
+            ForEach(HotCue.letters.filter { track.hotCues?[$0] != nil }, id: \.self) { letter in
+                let at: Double = track.hotCues?[letter] ?? 0
+                let c = HotCue.rgb[letter] ?? (1, 1, 1)
+                Text(letter)
+                    .font(.system(size: 8, weight: .heavy)).foregroundColor(.black)
+                    .frame(width: 10, height: 10)
+                    .background(RoundedRectangle(cornerRadius: 2).fill(Color(red: c.0, green: c.1, blue: c.2)))
+                    .offset(x: min(g.size.width - 10, max(0, g.size.width * CGFloat(at / dur) - 5)), y: 1)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -1013,8 +1034,8 @@ struct MiniWave: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 3).fill(Color.black.opacity(0.35))
-            if track.hasWave, let img = WaveformCache.shared.image(for: track, width: 192, height: 52, store: library) {
-                Image(decorative: img, scale: 2).resizable().interpolation(.high)
+            if track.hasWave, let img = WaveformCache.shared.image(for: track, width: 600, height: 44, store: library) {
+                Image(decorative: img, scale: 2).resizable().interpolation(.medium)
             }
         }
     }

@@ -47,6 +47,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var clipsRepaired: Int?
     var limitingDB: Double?
     var cues: [Double]?           // dine markeringer (sekunder) til at planlægge sættet
+    var hotCues: [String: Double]? // hot cues A–H (sekunder), som på en CDJ
     var deadSpace: Double?        // sekunders stilhed til sidst
     var trimmed: Bool?            // død luft er fjernet
 
@@ -249,7 +250,12 @@ enum WaveColor {
     static let floor = 0.35
 
     /// `floor` 0,35 = pastel (overblik og tabel), ca. 0,08 = mættet som rekordbox' detaljevisning.
-    static func rgb(_ lo: Double, _ mi: Double, _ hi: Double, floor f: Double = WaveColor.floor) -> (r: Double, g: Double, b: Double)? {
+    static func rgb(_ lo0: Double, _ mi0: Double, _ hi0: Double, floor f: Double = WaveColor.floor,
+                    boost: Bool = false) -> (r: Double, g: Double, b: Double)? {
+        // boost: mellem og diskant fremhæves (som rekordbox' detaljevisning: hi-hats blå, vokal/synth grøn)
+        let lo = lo0
+        let mi = boost ? mi0 * 1.6 : mi0
+        let hi = boost ? hi0 * 2.0 : hi0
         let top = max(lo, max(mi, hi))
         guard top > 0 else { return nil }
         return (f + (1 - f) * lo / top, f + (1 - f) * mi / top, f + (1 - f) * hi / top)
@@ -287,6 +293,15 @@ enum WaveColor {
         guard let c = rgb(v[0], v[1], v[2]) else { return nil }
         return (max(v[0], max(v[1], v[2])) / 255, c.r, c.g, c.b)
     }
+}
+
+/// Hot cues A–H med rekordbox' farver.
+enum HotCue {
+    static let letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    static let rgb: [String: (Double, Double, Double)] = [
+        "A": (0.91, 0.16, 0.36), "B": (0.24, 0.55, 0.95), "C": (0.33, 0.78, 0.33), "D": (0.62, 0.36, 0.94),
+        "E": (0.24, 0.80, 0.50), "F": (0.94, 0.48, 0.17), "G": (0.18, 0.33, 0.94), "H": (0.80, 0.72, 0.20),
+    ]
 }
 
 /// Takt og slag ud fra BPM og første slag: 4 slag pr. takt, 8 takter pr. frase.
