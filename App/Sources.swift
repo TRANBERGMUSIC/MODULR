@@ -19,6 +19,8 @@ enum SourceError: LocalizedError {
 
 // MARK: - SoundCloud
 
+/// Officielt SoundCloud-API. Bruger din egen konto, hvis du har logget ind under Konti
+/// (OAuth 2.1 Authorization Code + PKCE), ellers app-adgang (client credentials).
 final class SoundCloudAPI {
     struct Token: Codable {
         var accessToken: String
@@ -26,55 +28,99 @@ final class SoundCloudAPI {
         var expiresAt: Date
     }
 
+    static let redirectURI = "modulr://soundcloud/callback"
+
     let clientID: String
     let clientSecret: String
-    private static var tokenFile: URL { AppFolders.support.appendingPathComponent("soundcloud-token.json") }
+    private static var appTokenFile: URL { AppFolders.support.appendingPathComponent("soundcloud-token.json") }
+    static var userTokenFile: URL { AppFolders.support.appendingPathComponent("soundcloud-user-token.json") }
 
     init(clientID: String, clientSecret: String) {
         self.clientID = clientID
         self.clientSecret = clientSecret
     }
 
-    private func loadToken() -> Token? {
-        guard let d = try? Data(contentsOf: Self.tokenFile) else { return nil }
+    static var hasUserLogin: Bool { FileManager.default.fileExists(atPath: userTokenFile.path) }
+
+    static func logoutUser() { try? FileManager.default.removeItem(at: userTokenFile) }
+
+    private static func load(_ url: URL) -> Token? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(Token.self, from: d)
     }
 
-    private func saveToken(_ t: Token) {
+    static func save(_ t: Token, to url: URL) {
         guard let d = try? JSONEncoder().encode(t) else { return }
-        try? d.write(to: Self.tokenFile, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.tokenFile.path)
+        try? d.write(to: url, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    /// Tokens genbruges (SoundCloud tillader få nye pr. døgn) og fornyes med refresh_token.
-    func accessToken() async throws -> String {
-        if let t = loadToken(), t.expiresAt > Date().addingTimeInterval(60) { return t.accessToken }
-        var form = "grant_type=client_credentials"
-        if let t = loadToken(), let refresh = t.refreshToken {
-            form = "grant_type=refresh_token&refresh_token=\(refresh)&client_id=\(clientID)&client_secret=\(clientSecret)"
-        }
+    private func tokenRequest(_ form: [String: String]) async throws -> Token {
         var req = URLRequest(url: URL(string: "https://secure.soundcloud.com/oauth/token")!)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Accept")
         let basic = Data("\(clientID):\(clientSecret)".utf8).base64EncodedString()
         req.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
-        req.httpBody = Data(form.utf8)
-        var (data, http) = try await HTTP.shared.data(req)
-        if http.statusCode != 200 && form.hasPrefix("grant_type=refresh_token") {
-            // Refresh-token brugt/udløbet – hent et nyt token
-            req.httpBody = Data("grant_type=client_credentials".utf8)
-            (data, http) = try await HTTP.shared.data(req)
-        }
+        var c = URLComponents()
+        c.queryItems = form.map { URLQueryItem(name: $0.key, value: $0.value) }
+        req.httpBody = Data((c.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B").utf8)
+        let (data, http) = try await HTTP.shared.data(req)
         guard http.statusCode == 200,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = obj["access_token"] as? String else {
-            throw SourceError.failed("SoundCloud-login fejlede (\(http.statusCode)) – tjek client-id/secret")
+            throw SourceError.failed("SoundCloud-login fejlede (\(http.statusCode)) – tjek client-id/secret under Konti")
         }
         let expires = (obj["expires_in"] as? NSNumber)?.doubleValue ?? 3600
-        saveToken(Token(accessToken: access, refreshToken: obj["refresh_token"] as? String,
-                        expiresAt: Date().addingTimeInterval(expires)))
-        return access
+        return Token(accessToken: access, refreshToken: obj["refresh_token"] as? String,
+                     expiresAt: Date().addingTimeInterval(expires))
+    }
+
+    /// Bytter koden fra SoundCloud-login til et token for DIN konto.
+    func exchange(code: String, verifier: String) async throws {
+        let t = try await tokenRequest([
+            "grant_type": "authorization_code", "client_id": clientID, "client_secret": clientSecret,
+            "redirect_uri": Self.redirectURI, "code_verifier": verifier, "code": code,
+        ])
+        Self.save(t, to: Self.userTokenFile)
+    }
+
+    /// Din konto først (fornyes automatisk); ellers app-adgang. Tokens genbruges, da SoundCloud
+    /// kun tillader få nye pr. døgn.
+    func accessToken() async throws -> String {
+        if let t = Self.load(Self.userTokenFile) {
+            if t.expiresAt > Date().addingTimeInterval(60) { return t.accessToken }
+            if let refresh = t.refreshToken,
+               let fresh = try? await tokenRequest(["grant_type": "refresh_token", "refresh_token": refresh,
+                                                     "client_id": clientID, "client_secret": clientSecret]) {
+                var keep = fresh
+                if keep.refreshToken == nil { keep.refreshToken = refresh }
+                Self.save(keep, to: Self.userTokenFile)
+                return keep.accessToken
+            }
+            Self.logoutUser()   // udløbet – du skal logge ind igen under Konti
+        }
+        if let t = Self.load(Self.appTokenFile), t.expiresAt > Date().addingTimeInterval(60) { return t.accessToken }
+        var t: Token
+        if let old = Self.load(Self.appTokenFile), let refresh = old.refreshToken,
+           let fresh = try? await tokenRequest(["grant_type": "refresh_token", "refresh_token": refresh,
+                                                 "client_id": clientID, "client_secret": clientSecret]) {
+            t = fresh
+        } else {
+            t = try await tokenRequest(["grant_type": "client_credentials"])
+        }
+        Self.save(t, to: Self.appTokenFile)
+        return t.accessToken
+    }
+
+    /// Hvem er logget ind (kun når du har forbundet din konto).
+    func me() async throws -> String? {
+        guard Self.hasUserLogin else { return nil }
+        let token = try await accessToken()
+        let (data, http) = try await HTTP.shared.get(URL(string: "https://api.soundcloud.com/me")!,
+                                                     headers: ["Authorization": "OAuth \(token)", "Accept": "application/json; charset=utf-8"])
+        guard http.statusCode == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj["username"] as? String
     }
 
     func search(_ query: String) async throws -> [CandidateBuilder.SCTrack] {
@@ -99,7 +145,9 @@ final class SoundCloudAPI {
             let (file, _) = try await HTTP.shared.download(approved, headers: ["Authorization": "OAuth \(token)"])
             return file
         } catch HTTPError.status(let code, _) where code == 401 || code == 403 {
-            throw SourceError.failed("SoundCloud kræver, at du selv er logget ind for at hente denne fil. Åbn sporet på SoundCloud og brug download-knappen.")
+            throw SourceError.failed(Self.hasUserLogin
+                ? "SoundCloud gav ikke adgang til filen. Åbn sporet på SoundCloud og brug download-knappen."
+                : "SoundCloud kræver, at du er logget ind. Forbind din SoundCloud-konto under Konti.")
         }
     }
 }

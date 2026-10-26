@@ -83,8 +83,7 @@ struct GateWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             self.webView = webView
-            if let url = navigationAction.request.url, let scheme = url.scheme?.lowercased(),
-               scheme == "http" || scheme == "https", SourcePolicy.isForbidden(url) {
+            if let url = navigationAction.request.url, SourcePolicy.isBlockedForBrowsing(url) {
                 parent.status = "Blokeret: \(url.host ?? "") er ikke en tilladt kilde."
                 decisionHandler(.cancel)
                 return
@@ -134,6 +133,11 @@ struct GateWebView: NSViewRepresentable {
             let key = ObjectIdentifier(download)
             guard let dest = destinations[key] else { return }
             let title = webView?.title
+            if let src = sources[key], SourcePolicy.isForbidden(src) {
+                try? FileManager.default.removeItem(at: dest)
+                parent.status = "Filen kom fra \(src.host ?? "en ukendt vært") og er afvist og slettet."
+                return
+            }
             parent.status = "Filen er hentet – MODULR verificerer den nu."
             parent.onFile(dest, sources[key], title)
         }

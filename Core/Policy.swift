@@ -113,6 +113,17 @@ enum SourcePolicy {
         return false
     }
 
+    /// Sider du selv må klikke dig rundt på i MODULRs browser (gates, login). YouTube er tilladt
+    /// at besøge (fx "abonnér"-trin på en gate), men ALDRIG at hente fra – det afviser isForbidden.
+    static let browsableExceptions = ["youtube.com", "youtu.be"]
+
+    static func isBlockedForBrowsing(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
+        guard let host = Domains.host(url) else { return true }
+        if Domains.matchesAny(host, browsableExceptions) { return false }
+        return isForbidden(url)
+    }
+
     /// Godkend en side. Kun gates, Bandcamp, kunstnerens egne domæner og (for SoundCloud-kilden) soundcloud.com.
     static func approvePage(_ url: URL, source: SourceKind, artistDomains: [String]) -> ApprovedPage? {
         guard !isForbidden(url), let host = Domains.host(url) else { return nil }

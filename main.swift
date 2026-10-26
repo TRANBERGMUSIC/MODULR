@@ -51,6 +51,7 @@ enum Tool: String, CaseIterable, Identifiable {
     case bitrate = "Bitrate-tjek"
     case findBetter = "Find bedre version"
     case artwork = "Artwork"
+    case accounts = "Konti"
     var id: String { rawValue }
 }
 
@@ -813,6 +814,7 @@ struct ModulrApp: App {
     @StateObject private var settings: FBSettings
     @StateObject private var findBetter: FindBetterModel
     @StateObject private var artwork = ArtworkModel()
+    @StateObject private var accounts = AccountsModel()
 
     init() {
         let s = FBSettings()
@@ -828,6 +830,7 @@ struct ModulrApp: App {
                 .environmentObject(settings)
                 .environmentObject(findBetter)
                 .environmentObject(artwork)
+                .environmentObject(accounts)
                 .frame(minWidth: 1100, minHeight: 720)
                 .background(Color.void)
                 .preferredColorScheme(.dark)
@@ -862,6 +865,7 @@ struct RootView: View {
             case .bitrate: ContentView()
             case .findBetter: FindBetterToolView()
             case .artwork: ArtworkToolView()
+            case .accounts: AccountsView()
             }
         }
         .onChange(of: model.findBetterRequest) { url in

@@ -21,6 +21,15 @@ VÆRKTØJER (vælges øverst til højre)
   Billedet gemmes i filen som JPEG (maks. 800x800), som Pioneer kræver.
   I rekordbox: marker sporene, højreklik -> "Reload Tag", og eksportér til USB.
 
+KONTI (log ind én gang)
+- Vælg KONTI øverst til højre og klik "Log ind" ved SoundCloud, Hypeddit, ToneDen,
+  Spotify, Instagram og Bandcamp. Du logger selv ind på deres egne sider; MODULR
+  husker det, så gates i MODULR typisk kun kræver et par klik bagefter.
+- SoundCloud-API: ansøg om en app på soundcloud.com/you/apps, sæt redirect-URI til
+  modulr://soundcloud/callback, indsæt client-id/secret og klik
+  "Forbind min SoundCloud-konto".
+- AcoustID-nøglen kan også indsættes på Konti-siden.
+
 INDSTILLINGER (MODULR-menuen -> Indstillinger, eller Cmd + ,)
 - AcoustID-nøgle: gratis på acoustid.org (Register -> "New application").
   Uden den kan MODULR ikke genkende sange ud fra lyden, kun ud fra tags.

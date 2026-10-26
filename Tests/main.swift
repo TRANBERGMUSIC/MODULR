@@ -275,6 +275,10 @@ do {
     let ticket = SourcePolicy.startSession(for: page("https://hypeddit.com/fisher/losingit")!)
     check("Browser-download fra gate godkendes", SourcePolicy.approveBrowserDownload(fileSourceURL: URL(string: "https://cdn.hypeddit.com/f.wav"), ticket: ticket) != nil)
     check("Browser-download fra forbudt vært afvises", SourcePolicy.approveBrowserDownload(fileSourceURL: URL(string: "https://mega.nz/file/x"), ticket: ticket) == nil)
+    check("YouTube må besøges i gate-browseren", !SourcePolicy.isBlockedForBrowsing(URL(string: "https://www.youtube.com/channel/x")!))
+    check("…men aldrig hentes fra", SourcePolicy.approveBrowserDownload(fileSourceURL: URL(string: "https://www.youtube.com/x.mp3"), ticket: ticket) == nil)
+    check("Filehost blokeres også i browseren", SourcePolicy.isBlockedForBrowsing(URL(string: "https://mega.nz/file/x")!))
+    check("about:blank blokeres ikke", !SourcePolicy.isBlockedForBrowsing(URL(string: "about:blank")!))
     print("  ℹ️ ApprovedDownload/ApprovedPage/GateSessionTicket kan kun oprettes i Policy.swift (fileprivate init),")
     print("     og HTTP.download tager kun en ApprovedDownload – det er sikret af compileren.")
 }
