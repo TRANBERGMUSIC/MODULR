@@ -306,7 +306,8 @@ final class LibraryStore: ObservableObject {
     func replaceFile(_ id: UUID, with newURL: URL, rule: ImprovementRule, force: Bool = false) async throws -> String {
         guard let t = snapshot().track(id) else { throw ReplaceError.message("Sangen findes ikke") }
         await MainActor.run { _ = self.working.insert(id) }
-        defer { DispatchQueue.main.async { self.working.remove(id) } }
+        let me = self
+        defer { Task { @MainActor in me.working.remove(id) } }
         let fm = FileManager.default
         let old = t.url
         let oldExists = fm.fileExists(atPath: old.path)

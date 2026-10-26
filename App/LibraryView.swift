@@ -732,36 +732,26 @@ struct TrackListView: View {
                          targeted: targeted)
             } else {
                 Table(of: LibTrack.self, selection: $ui.tableSelection, sortOrder: $sortOrder) {
-                    TableColumn("") { t in
-                        MiniWave(track: t).frame(width: 96, height: 26)
-                    }
-                    .width(104)
-                    TableColumn("") { t in Cover(track: t, size: 28) }.width(34)
-                    TableColumn("Kunstner", value: \.artist) { t in
-                        Text(t.artist.isEmpty ? "Ukendt" : t.artist).foregroundColor(t.artist.isEmpty ? .mist.opacity(0.4) : .mist.opacity(0.85)).lineLimit(1)
-                    }
-                    .width(min: 110, ideal: 170)
-                    TableColumn("Titel", value: \.title) { t in
-                        HStack(spacing: 5) {
-                            if library.analyzing.contains(t.id) { ProgressView().controlSize(.mini) }
-                            if library.working.contains(t.id) { Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(.ember) }
-                            Text(t.title).foregroundColor(.mist).lineLimit(1)
-                        }
-                        .help(t.path)
-                    }
-                    .width(min: 160, ideal: 280)
-                    TableColumn("Key", value: \.sortKey) { t in
-                        if let k = t.key { KeyPill(key: k) } else { Text("–").foregroundColor(.mist.opacity(0.3)) }
-                    }
-                    .width(56)
-                    TableColumn("BPM", value: \.sortBPM) { t in Text(t.bpmText).monospacedDigit().foregroundColor(.mist) }.width(48)
-                    TableColumn("Toneart", value: \.sortKey) { t in Text(t.key?.classic ?? "–").foregroundColor(.mist.opacity(0.7)) }.width(58)
-                    TableColumn("Energi", value: \.sortEnergy) { t in EnergyBar(value: t.energy) }.width(70)
-                    Group {
-                        TableColumn("Længde", value: \.sortDuration) { t in Text(t.durationText).monospacedDigit().foregroundColor(.mist.opacity(0.7)) }.width(56)
-                        TableColumn("Kvalitet", value: \.sortQuality) { t in QualityText(track: t) }.width(min: 80, ideal: 104)
-                        TableColumn("Format") { t in Text(t.codec).font(.system(size: 11)).foregroundColor(.mist.opacity(0.5)) }.width(50)
-                    }
+                    TableColumn("") { (t: LibTrack) in WaveCell(track: t) }
+                        .width(104)
+                    TableColumn("") { (t: LibTrack) in Cover(track: t, size: 28) }
+                        .width(34)
+                    TableColumn("Kunstner", value: \LibTrack.artist) { (t: LibTrack) in ArtistCell(track: t) }
+                        .width(min: 110, ideal: 170)
+                    TableColumn("Titel", value: \LibTrack.title) { (t: LibTrack) in TitleCell(track: t) }
+                        .width(min: 160, ideal: 280)
+                    TableColumn("Key", value: \LibTrack.sortKey) { (t: LibTrack) in KeyCell(track: t) }
+                        .width(56)
+                    TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
+                        .width(48)
+                    TableColumn("Toneart", value: \LibTrack.sortKey) { (t: LibTrack) in ClassicKeyCell(track: t) }
+                        .width(58)
+                    TableColumn("Energi", value: \LibTrack.sortEnergy) { (t: LibTrack) in EnergyBar(value: t.energy) }
+                        .width(70)
+                    TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
+                        .width(56)
+                    TableColumn("Kvalitet", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
+                        .width(min: 96, ideal: 130)
                 } rows: {
                     ForEach(rows) { t in
                         TableRow(t)
@@ -871,6 +861,77 @@ struct TrackListView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Celler (små, enkle visninger så tabellen er let for oversætteren)
+
+struct WaveCell: View {
+    let track: LibTrack
+    var body: some View { MiniWave(track: track).frame(width: 96, height: 26) }
+}
+
+struct ArtistCell: View {
+    let track: LibTrack
+    var body: some View {
+        let unknown: Bool = track.artist.isEmpty
+        let text: String = unknown ? "Ukendt" : track.artist
+        let alpha: Double = unknown ? 0.4 : 0.85
+        return Text(text).foregroundColor(Color.mist.opacity(alpha)).lineLimit(1)
+    }
+}
+
+struct TitleCell: View {
+    @EnvironmentObject var library: LibraryStore
+    let track: LibTrack
+    var body: some View {
+        HStack(spacing: 5) {
+            if library.analyzing.contains(track.id) { ProgressView().controlSize(.mini) }
+            if library.working.contains(track.id) {
+                Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(Color.ember)
+            }
+            Text(track.title).foregroundColor(Color.mist).lineLimit(1)
+        }
+        .help(track.path)
+    }
+}
+
+struct KeyCell: View {
+    let track: LibTrack
+    var body: some View {
+        if let k = track.key {
+            KeyPill(key: k)
+        } else {
+            Text("–").foregroundColor(Color.mist.opacity(0.3))
+        }
+    }
+}
+
+struct BPMCell: View {
+    let track: LibTrack
+    var body: some View { Text(track.bpmText).monospacedDigit().foregroundColor(Color.mist) }
+}
+
+struct ClassicKeyCell: View {
+    let track: LibTrack
+    var body: some View {
+        let text: String = track.key?.classic ?? "–"
+        return Text(text).foregroundColor(Color.mist.opacity(0.7))
+    }
+}
+
+struct DurationCell: View {
+    let track: LibTrack
+    var body: some View { Text(track.durationText).monospacedDigit().foregroundColor(Color.mist.opacity(0.7)) }
+}
+
+struct QualityCell: View {
+    let track: LibTrack
+    var body: some View {
+        HStack(spacing: 6) {
+            QualityText(track: track)
+            Text(track.codec).font(.system(size: 10)).foregroundColor(Color.mist.opacity(0.4))
         }
     }
 }
@@ -1097,14 +1158,16 @@ struct UsbPlaylistView: View {
             VStack(spacing: 0) {
                 UsbHeader(drive: d, title: node?.name ?? d.name)
                 Table(list) {
-                    TableColumn("#") { t in Text("\((list.firstIndex(of: t) ?? 0) + 1)").foregroundColor(.mist.opacity(0.4)) }.width(30)
-                    TableColumn("Kunstner") { t in Text(t.artist).foregroundColor(.mist.opacity(0.85)) }
-                    TableColumn("Titel") { t in Text(t.title).foregroundColor(.mist) }
-                    TableColumn("Key") { t in
-                        if let k = MusicalKey.parse(t.key) { KeyPill(key: k) } else { Text(t.key) }
-                    }.width(56)
-                    TableColumn("BPM") { t in Text(t.bpm > 0 ? String(format: "%.0f", t.bpm) : "–").monospacedDigit() }.width(48)
-                    TableColumn("Længde") { t in Text(String(format: "%d:%02d", t.duration / 60, t.duration % 60)).monospacedDigit() }.width(56)
+                    TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
+                        .width(30)
+                    TableColumn("Kunstner") { (t: UsbTrackInfo) in UsbTextCell(text: t.artist, alpha: 0.85) }
+                    TableColumn("Titel") { (t: UsbTrackInfo) in UsbTextCell(text: t.title, alpha: 1) }
+                    TableColumn("Key") { (t: UsbTrackInfo) in UsbKeyCell(key: t.key) }
+                        .width(56)
+                    TableColumn("BPM") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.bpmText(t.bpm), alpha: 1) }
+                        .width(48)
+                    TableColumn("Længde") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.timeText(t.duration), alpha: 0.8) }
+                        .width(56)
                 }
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 12)
@@ -1116,6 +1179,33 @@ struct UsbPlaylistView: View {
             Text("USB'en er ikke sat i").foregroundColor(.mist.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
+}
+
+struct UsbIndexCell: View {
+    let index: Int
+    var body: some View { Text(String(index)).foregroundColor(Color.mist.opacity(0.4)) }
+}
+
+struct UsbTextCell: View {
+    let text: String
+    let alpha: Double
+    var body: some View { Text(text).monospacedDigit().foregroundColor(Color.mist.opacity(alpha)).lineLimit(1) }
+}
+
+struct UsbKeyCell: View {
+    let key: String
+    var body: some View {
+        if let k = MusicalKey.parse(key) {
+            KeyPill(key: k)
+        } else {
+            Text(key).foregroundColor(Color.mist.opacity(0.6))
+        }
+    }
+}
+
+extension UsbTrackInfo {
+    static func bpmText(_ b: Double) -> String { b > 0 ? String(Int(b.rounded())) : "–" }
+    static func timeText(_ s: Int) -> String { String(format: "%d:%02d", s / 60, s % 60) }
 }
 
 struct UsbPendingView: View {
