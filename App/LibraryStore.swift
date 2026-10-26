@@ -966,6 +966,19 @@ final class LibraryStore: ObservableObject {
         analysis["duration"] = t.duration ?? 0
         analysis["first_beat_ms"] = t.firstBeatMs ?? 0
         analysis["bands"] = Data(bands(t)).base64EncodedString()
+        // Hot cues A–H med farve og memory cues – som rekordbox sender dem til CDJ'en
+        var hot = [[String: Any]]()
+        for (i, letter) in HotCue.letters.enumerated() {
+            guard let sec = t.hotCues?[letter] else { continue }
+            let c = HotCue.rgb[letter] ?? (1, 1, 1)
+            hot.append(["slot": i + 1, "ms": sec * 1000, "rgb": [Int(c.0 * 255), Int(c.1 * 255), Int(c.2 * 255)]])
+        }
+        analysis["hot_cues"] = hot
+        var memory = (t.cues ?? []).map { $0 * 1000 }
+        // Den orange cue på første slag (så CDJ'en står klar på første beat, ligesom i MODULR)
+        let cueMs = PlayerModel.autoCue(for: t, peaks: peaks(t)) * 1000
+        if (t.bpm ?? 0) > 0, !memory.contains(where: { abs($0 - cueMs) < 5 }) { memory.append(cueMs) }
+        analysis["memory_cues"] = memory.sorted()
         d["analysis"] = analysis
         return d
     }

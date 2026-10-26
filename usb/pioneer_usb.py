@@ -24,6 +24,7 @@ import datetime
 import json
 import os
 import shutil
+import re
 import struct
 import sys
 import tempfile
@@ -237,6 +238,22 @@ class Pdb(object):
                 "key_id": key, "artwork_id": art, "bpm": tempo / 100.0, "duration": dur, "path": s[20],
                 "filename": s[19], "analyze_path": s[14], "date_added": s[10], "u3": u3, "u4": u4,
                 "bitrate": bitrate, "sample_rate": sr, "depth": depth, "file_type": ftype, "comment": s[16]}
+
+    def set_analyze_path(self, track_id, new_path):
+        """Ret sporets analyze_path på stedet (kun når den nye sti har samme længde – så intet andet flytter sig)."""
+        for pos in self.rows(T_TRACKS):
+            if self.read_track(pos)["id"] != track_id:
+                continue
+            o = struct.unpack_from("<H", self.data, pos + 0x5C + 2 + 2 * 14)[0]
+            at = pos + o
+            flags = self.data[at]
+            old = decode_string(self.data, at)
+            raw = new_path.encode("ascii")
+            if not (flags & 1) or len(raw) != len(old):
+                return False
+            self.data[at + 1:at + 1 + len(raw)] = raw
+            return True
+        return False
 
     def read_named(self, pos, t):
         if t == T_ARTISTS:
@@ -557,12 +574,75 @@ def _pvbr():
     return _tag(b"PVBR", struct.pack(">I", 0), b"\x00" * 1604)
 
 
-def _pcob(kind):
-    return _tag(b"PCOB", struct.pack(">IIi", kind, 0, -1), b"")
+# rekordbox' farvepalette til hot cues (color_code -> RGB), som CDJ'erne kender den.
+HOTCUE_PALETTE = {
+    0x01: (0x30, 0x5a, 0xff), 0x02: (0x50, 0x73, 0xff), 0x03: (0x50, 0x8c, 0xff), 0x04: (0x50, 0xa0, 0xff),
+    0x05: (0x50, 0xb4, 0xff), 0x06: (0x50, 0xb0, 0xf2), 0x07: (0x50, 0xae, 0xe8), 0x08: (0x45, 0xac, 0xdb),
+    0x09: (0x00, 0xe0, 0xff), 0x0a: (0x19, 0xda, 0xf0), 0x0b: (0x32, 0xd2, 0xe6), 0x0c: (0x21, 0xb4, 0xb9),
+    0x0d: (0x20, 0xaa, 0xa0), 0x0e: (0x1f, 0xa3, 0x92), 0x0f: (0x19, 0xa0, 0x8c), 0x10: (0x14, 0xa5, 0x84),
+    0x11: (0x14, 0xaa, 0x7d), 0x12: (0x10, 0xb1, 0x76), 0x13: (0x30, 0xd2, 0x6e), 0x14: (0x37, 0xde, 0x5a),
+    0x15: (0x3c, 0xeb, 0x50), 0x16: (0x28, 0xe2, 0x14), 0x17: (0x7d, 0xc1, 0x3d), 0x18: (0x8c, 0xc8, 0x32),
+    0x19: (0x9b, 0xd7, 0x23), 0x1a: (0xa5, 0xe1, 0x16), 0x1b: (0xa5, 0xdc, 0x0a), 0x1c: (0xaa, 0xd2, 0x08),
+    0x1d: (0xb4, 0xc8, 0x05), 0x1e: (0xb4, 0xbe, 0x04), 0x1f: (0xba, 0xb4, 0x04), 0x20: (0xc3, 0xaf, 0x04),
+    0x21: (0xe1, 0xaa, 0x00), 0x22: (0xff, 0xa0, 0x00), 0x23: (0xff, 0x96, 0x00), 0x24: (0xff, 0x8c, 0x00),
+    0x25: (0xff, 0x75, 0x00), 0x26: (0xe0, 0x64, 0x1b), 0x27: (0xe0, 0x46, 0x1e), 0x28: (0xe0, 0x30, 0x1e),
+    0x29: (0xe0, 0x28, 0x23), 0x2a: (0xe6, 0x28, 0x28), 0x2b: (0xff, 0x37, 0x6f), 0x2c: (0xff, 0x2d, 0x6f),
+    0x2d: (0xff, 0x12, 0x7b), 0x2e: (0xf5, 0x1e, 0x8c), 0x2f: (0xeb, 0x2d, 0xa0), 0x30: (0xe6, 0x37, 0xb4),
+    0x31: (0xde, 0x44, 0xcf), 0x32: (0xde, 0x44, 0x8d), 0x33: (0xe6, 0x30, 0xb4), 0x34: (0xe6, 0x19, 0xdc),
+    0x35: (0xe6, 0x00, 0xff), 0x36: (0xdc, 0x00, 0xff), 0x37: (0xcc, 0x00, 0xff), 0x38: (0xb4, 0x32, 0xff),
+    0x39: (0xb9, 0x3c, 0xff), 0x3a: (0xc5, 0x42, 0xff), 0x3b: (0xaa, 0x5a, 0xff), 0x3c: (0xaa, 0x72, 0xff),
+    0x3d: (0x82, 0x72, 0xff), 0x3e: (0x64, 0x73, 0xff),
+}
 
 
-def _pco2(kind):
-    return _tag(b"PCO2", struct.pack(">II", kind, 0), b"")
+def nearest_hotcue_color(rgb):
+    """Nærmeste farve i rekordbox' palette (så CDJ'ens pads lyser i samme farve som i MODULR)."""
+    if not rgb:
+        return 0, (0, 0, 0)
+    r, g, b = rgb
+    code = min(HOTCUE_PALETTE, key=lambda c: (HOTCUE_PALETTE[c][0] - r) ** 2 + (HOTCUE_PALETTE[c][1] - g) ** 2 + (HOTCUE_PALETTE[c][2] - b) ** 2)
+    return code, HOTCUE_PALETTE[code]
+
+
+def _cue_list(cues, hot):
+    """cues: [(slot, ms)] – slot 0 = memory cue, 1–8 = hot cue A–H. Sorteret efter tid (memory) / slot (hot)."""
+    # rekordbox skriver hot cues baglæns (H … A) og memory cues efter tid
+    return sorted(cues, key=lambda c: -c[0]) if hot else sorted(cues, key=lambda c: c[1])
+
+
+def _pcob(kind, cues=()):
+    """Cue-liste i det gamle format (alle CDJ'er): PCPT-poster á 0x38 bytes."""
+    cues = _cue_list([c for c in cues if (c[0] > 0) == (kind == 1)], kind == 1)
+    n = len(cues)
+    body = b""
+    for slot, ms, *_rest in cues:
+        e = b"PCPT" + struct.pack(">II", 0x1C, 0x38)
+        e += struct.pack(">IIIHH", slot, 0, 0x00010000, 0xFFFF, 0xFFFF)
+        e += struct.pack(">B3sII", 1, b"\x00\x03\xe8", int(ms), 0xFFFFFFFF)
+        e += b"\x00" * (0x38 - len(e))
+        body += e
+    return _tag(b"PCOB", struct.pack(">IHHi", kind, 0, n, -1), body)
+
+
+def _pco2(kind, cues=()):
+    """Udvidet cue-liste (nxs2/CDJ-3000): hot cues A–H med farve."""
+    cues = _cue_list([c for c in cues if (c[0] > 0) == (kind == 1)], kind == 1)
+    body = b""
+    for c in cues:
+        slot, ms = c[0], c[1]
+        rgb = c[2] if len(c) > 2 else None
+        e = b"PCP2" + struct.pack(">II", 0x10, 0x58)
+        e += struct.pack(">IB3sII", slot, 1, b"\x00\x03\xe8", int(ms), 0xFFFFFFFF)
+        e += struct.pack(">B7sHH", 0, b"\x01" + b"\x00" * 6, 0, 0)
+        e += struct.pack(">I", 0)                      # ingen kommentar
+        if slot > 0:
+            code, (r, g, b) = nearest_hotcue_color(rgb)
+            e += struct.pack(">BBBB", code, r, g, b)
+        else:
+            e += b"\x00\x00\x00\x00"
+        e += b"\x00" * (0x58 - len(e))
+        body += e
+    return _tag(b"PCO2", struct.pack(">IHH", kind, len(cues), 0), body)
 
 
 def _pwv3(cols):
@@ -576,6 +656,18 @@ def _pwv4(cols6):
 def _pwv5(words):
     body = b"".join(struct.pack(">H", w) for w in words)
     return _tag(b"PWV5", struct.pack(">III", 2, len(words), 0x00960305), body)
+
+
+def _pwv6(cols3):
+    return _tag(b"PWV6", struct.pack(">II", 3, len(cols3) // 3), bytes(cols3))
+
+
+def _pwv7(cols3):
+    return _tag(b"PWV7", struct.pack(">III", 3, len(cols3) // 3, 0x00960000), bytes(cols3))
+
+
+def _pwvc(levels):
+    return _tag(b"PWVC", struct.pack(">H", 0), struct.pack(">HHH", *levels))
 
 
 def _anlz_file(sections):
@@ -596,25 +688,116 @@ def _resample_max(bands, n):
     return out
 
 
+def _ref(values, q=0.99):
+    """Sangens reference-niveau (99 %-percentil), så waveformen fylder som i rekordbox."""
+    v = sorted(values)
+    return max(1, v[min(len(v) - 1, int(len(v) * q))]) if v else 1
+
+
+def _rgb7(lo, mi, hi):
+    """Samme farver som MODULRs egen RGB-waveform (rekordbox-stil): bas rød, mellem grøn, diskant blå.
+    Returnerer 0–7 pr. kanal (lyse, normaliserede farver – som rekordbox gemmer dem)."""
+    mi, hi = mi * 1.6, hi * 2.0
+    top = max(lo, mi, hi)
+    if top <= 0:
+        return 7, 7, 7
+    f = 0.1
+    return tuple(int(round(7 * (f + (1 - f) * x / top))) for x in (lo, mi, hi))
+
+
+def _smooth_cols(bands, n):
+    """n kolonner: 60 % gennemsnit + 40 % top (bløde, læsbare toppe – som MODULRs egen waveform)."""
+    total = len(bands)
+    out = []
+    for i in range(n):
+        a = i * total // n
+        b = max(a + 1, (i + 1) * total // n)
+        chunk = bands[a:b] if a < total else [(0, 0, 0)]
+        k = len(chunk)
+        out.append(tuple(0.6 * sum(c[j] for c in chunk) / k + 0.4 * max(c[j] for c in chunk) for j in range(3)))
+    return out
+
+
 def waveforms_from_bands(bands):
     """bands: liste af (lav, mellem, høj) 0–255 med 150 kolonner pr. sekund – MODULRs analyse.
-    Returnerer rekordbox' formater: PWAV, PWV2, PWV3, PWV4, PWV5."""
+    Returnerer rekordbox' formater: PWAV, PWV2, PWV3, PWV4, PWV5 – skaleret som rekordbox' egne filer."""
     if not bands:
         bands = [(0, 0, 0)]
+    ref = _ref([max(c) for c in bands], 0.995)
     detail = []
     color_detail = []
     for lo, mi, hi in bands:
-        h = max(lo, mi, hi) * 31 // 255
-        detail.append((h & 0x1F) | (((hi >> 5) & 0x7) << 5))
-        color_detail.append(((lo >> 5) << 13) | ((mi >> 5) << 10) | ((hi >> 5) << 7) | (h << 2))
-    prev = _resample_max(bands, 400)
-    pwav = [(max(c) * 31 // 255) | ((c[2] >> 5) << 5) for c in prev]
-    tiny = [max(c) * 15 // 255 for c in _resample_max(bands, 100)]
+        h = min(31, int(round(max(lo, mi, hi) / ref * 30)))
+        r, g, b = _rgb7(lo, mi, hi)
+        detail.append(h | (b << 5))                    # blå visning: højde + hvidhed (diskant)
+        color_detail.append((r << 13) | (g << 10) | (b << 7) | (h << 2))
+    prev = _smooth_cols(bands, 400)
+    pref = _ref([max(c) for c in prev])
+    pwav = []
+    for lo, mi, hi in prev:
+        h = min(25, int(round(max(lo, mi, hi) / pref * 24)))
+        pwav.append(h | (_rgb7(lo, mi, hi)[2] << 5))
+    tiny = [min(15, int(round(max(c) / pref * 14))) for c in _smooth_cols(bands, 100)]
+    cols = _smooth_cols(bands, 1200)
+    cref = _ref([max(c) for c in cols])
     cprev = []
-    for lo, mi, hi in _resample_max(bands, 1200):
-        top = max(lo, mi, hi)
-        cprev += [top, top, max(lo, mi), lo, mi, hi]
+    for lo, mi, hi in cols:
+        sl, sm, sh = (min(127, int(round(x / cref * 120))) for x in (lo, mi, hi))
+        top = max(sl, sm, sh)
+        cprev += [top, min(255, top * 2), max(sl, sm), sl, sm, sh]
     return pwav, tiny, detail, cprev, color_detail
+
+
+def three_band(bands):
+    """CDJ-3000's 3-bånds-waveform (.2EX): pr. kolonne (mellem, høj, lav).
+    Detalje: 150 kolonner/s (op til ca. 120). Oversigt: 1200 kolonner (op til ca. 45) – som rekordbox."""
+    if not bands:
+        bands = [(0, 0, 0)]
+    refs = [_ref([c[k] for c in bands], 0.995) for k in range(3)]
+    detail = []
+    for lo, mi, hi in bands:
+        detail += [min(127, int(mi / refs[1] * 115)), min(127, int(hi / refs[2] * 115)), min(127, int(lo / refs[0] * 115))]
+    cols = _smooth_cols(bands, 1200)
+    prefs = [_ref([c[k] for c in cols]) for k in range(3)]
+    prev = []
+    for lo, mi, hi in cols:
+        prev += [min(63, int(mi / prefs[1] * 42)), min(63, int(hi / prefs[2] * 42)), min(63, int(lo / prefs[0] * 42))]
+    return prev, detail
+
+
+
+MODULR_MARK = ".modulr"
+
+
+def anlz_folder_number(analyze_path):
+    m = re.match(r"^/PIONEER/USBANLZ/P([0-9A-F]{3})/([0-9A-F]{8})/", analyze_path or "")
+    return (int(m.group(1), 16), int(m.group(2), 16)) if m else None
+
+
+def is_modulr_anlz(analyze_path, folder):
+    """Er analysefilerne lavet af MODULR? (Mærkefil – eller ældre MODULR: mappe P800+ uden .2EX.)"""
+    if not folder or not os.path.isdir(folder):
+        return False
+    if os.path.exists(os.path.join(folder, MODULR_MARK)):
+        return True
+    n = anlz_folder_number(analyze_path)
+    return bool(n and n[0] >= 0x800 and not os.path.exists(os.path.join(folder, "ANLZ0000.2EX")))
+
+
+def new_anlz_path(root, usb_rel, taken):
+    """En analysemappe i samme område som rekordbox bruger (P000–P07F / 00000000–0003FFFF).
+    CDJ'en afviser mapper uden for det område – så kører den sin egen langsomme analyse."""
+    import zlib
+    h = zlib.crc32(usb_rel.encode("utf-8"))
+    p, sub = h & 0x7F, (h >> 7) & 0x3FFFF
+    for _ in range(0x40000):
+        rel = "/PIONEER/USBANLZ/P%03X/%08X/ANLZ0000.DAT" % (p, sub)
+        folder = os.path.join(root, os.path.dirname(rel).lstrip("/"))
+        if rel not in taken and not os.path.exists(folder):
+            taken.add(rel)
+            return rel
+        sub = (sub + 1) & 0x3FFFF
+    raise PdbError("Ingen ledig analysemappe på USB'en")
 
 
 def write_anlz(folder, usb_path, analysis):
@@ -629,12 +812,28 @@ def write_anlz(folder, usb_path, analysis):
     if not bands:
         bands = [(0, 0, 0)] * max(1, int(dur * 150))
     pwav, tiny, detail, cprev, cdet = waveforms_from_bands(bands)
-    dat = _anlz_file([_ppth(usb_path), _pvbr(), _pqtz(bpm, first, dur), _pwav(pwav), _pwv2(tiny), _pcob(1), _pcob(0)])
-    ext = _anlz_file([_ppth(usb_path), _pwv3(detail), _pcob(1), _pcob(0), _pco2(1), _pco2(0), _pwv5(cdet), _pwv4(cprev)])
-    with open(os.path.join(folder, "ANLZ0000.DAT"), "wb") as f:
-        f.write(dat)
-    with open(os.path.join(folder, "ANLZ0000.EXT"), "wb") as f:
-        f.write(ext)
+    p6, p7 = three_band(bands)
+    # Cues: [(slot, ms, rgb)] – slot 0 = memory cue, 1–8 = hot cue A–H
+    cues = []
+    for h in analysis.get("hot_cues") or []:
+        slot = int(h.get("slot") or 0)
+        if 1 <= slot <= 8:
+            rgb = tuple(int(x) for x in h.get("rgb")) if h.get("rgb") else None
+            cues.append((slot, max(0, int(round(float(h.get("ms") or 0)))), rgb))
+    seen_ms = set()
+    for m in analysis.get("memory_cues") or []:
+        ms = max(0, int(round(float(m))))
+        if ms not in seen_ms:
+            seen_ms.add(ms)
+            cues.append((0, ms, None))
+    dat = _anlz_file([_ppth(usb_path), _pvbr(), _pqtz(bpm, first, dur), _pwav(pwav), _pwv2(tiny),
+                      _pcob(1, cues), _pcob(0, cues)])
+    ext = _anlz_file([_ppth(usb_path), _pwv3(detail), _pcob(1, cues), _pcob(0, cues), _pco2(1, cues), _pco2(0, cues),
+                      _pwv5(cdet), _pwv4(cprev)])
+    ex2 = _anlz_file([_ppth(usb_path), _pwv7(p7), _pwv6(p6), _pwvc((0x5B, 0x8A, 0x18C))])
+    for name, data in (("ANLZ0000.DAT", dat), ("ANLZ0000.EXT", ext), ("ANLZ0000.2EX", ex2), (MODULR_MARK, b"MODULR\n")):
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(data)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -697,6 +896,9 @@ def write_usb(root, plan):
 
     copied = {}            # kilde-sti -> track-id
     existing_by_path = {t["path"]: t["id"] for t in db.all(T_TRACKS)}
+    anlz_by_path = {t["path"]: t.get("analyze_path", "") for t in db.all(T_TRACKS)}
+    taken_anlz = set(anlz_by_path.values())
+    moved_anlz = set()      # spor hvis analysemappe er flyttet ind i rekordbox' område
     contents = os.path.join(root, "Contents")
     log = []
 
@@ -711,6 +913,21 @@ def write_usb(root, plan):
         usb_rel = "/Contents/%s/%s/%s" % (artist, album, fname)
         if usb_rel in existing_by_path:
             copied[src] = existing_by_path[usb_rel]
+            # Sangen ligger der allerede: lagt på af MODULR → opdatér waveform, grid og cues.
+            # (rekordbox' egne analysefiler røres aldrig.)
+            ap = anlz_by_path.get(usb_rel, "")
+            folder = os.path.join(root, os.path.dirname(ap).lstrip("/")) if ap else ""
+            if is_modulr_anlz(ap, folder) and tr.get("analysis"):
+                n = anlz_folder_number(ap)
+                if n and n[0] >= 0x80:
+                    # Lagt på af en ældre MODULR i en mappe CDJ'en ikke læser → flyt til rekordbox' område
+                    rel = new_anlz_path(root, usb_rel, taken_anlz)
+                    if db.set_analyze_path(copied[src], rel):
+                        moved_anlz.add(copied[src])
+                        ap = rel
+                        folder = os.path.join(root, os.path.dirname(rel).lstrip("/"))
+                write_anlz(folder, usb_rel, tr["analysis"])
+                log.append("Opdateret waveform, grid og cues: " + usb_rel)
             return copied[src]
         dest = os.path.join(contents, artist, album, fname)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -733,7 +950,7 @@ def write_usb(root, plan):
             artwork_id = db.add_named(T_ARTWORK, art_rel)
 
         next_id = max([t["id"] for t in db.all(T_TRACKS)] + [0]) + 1
-        anlz_rel = "/PIONEER/USBANLZ/P%03X/%08X/ANLZ0000.DAT" % (0x800 + (next_id >> 12) % 0x800, next_id)
+        anlz_rel = new_anlz_path(root, usb_rel, taken_anlz)
         write_anlz(os.path.join(root, os.path.dirname(anlz_rel).lstrip("/")), usb_rel, tr.get("analysis") or {
             "bpm": tr.get("bpm"), "duration": tr.get("duration")})
         tid = db.add_track({
@@ -782,6 +999,11 @@ def write_usb(root, plan):
             def strip(rows):
                 return [{k: v for k, v in r.items() if k != "sort"} for r in rows]
             before, after = strip(before), strip(after)
+        if t == T_TRACKS and moved_anlz:
+            # Kun analysestien må ændre sig – og kun på de spor vi har flyttet
+            def strip_moved(rows):
+                return [{k: v for k, v in r.items() if not (k == "analyze_path" and r["id"] in moved_anlz)} for r in rows]
+            before, after = strip_moved(before), strip_moved(after)
         if len(after) < len(before) or any(b not in after for b in before):
             raise PdbError("Kontrol fejlede for tabel %d – intet er ændret på USB'en" % t)
 

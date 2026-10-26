@@ -379,7 +379,9 @@ final class PlayerModel: ObservableObject {
     var atCue: Bool { abs(position - cuePoint) < 0.02 }
 
     /// CDJ'ens "auto cue": det første slag hvor musikken faktisk starter (stilhed i starten springes over).
-    func autoCue(for t: LibTrack) -> Double {
+    func autoCue(for t: LibTrack) -> Double { Self.autoCue(for: t, peaks: peaks) }
+
+    static func autoCue(for t: LibTrack, peaks: [UInt8]) -> Double {
         // Hvor starter lyden? (første top over ca. −26 dB i forhold til sangens højeste)
         var start = 0.0
         if let i = peaks.firstIndex(where: { $0 > 12 }) { start = Double(i) / MusicAnalyzer.peakRate }
