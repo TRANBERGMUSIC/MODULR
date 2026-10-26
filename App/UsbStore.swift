@@ -110,12 +110,54 @@ final class UsbStore: ObservableObject {
     @Published var message: String?
 
     private var observers: [NSObjectProtocol] = []
+    private var watchTimer: Timer?
+    /// Sidst sete ændringstid/størrelse på USB'ens databaser (export.pdb og OneLibrary).
+    private var seen: [String: String] = [:]
+    /// En ændring skal have stået stille i ét tjek, før vi læser (rekordbox skriver over flere sekunder).
+    private var settling: [String: String] = [:]
 
     init() {
         refresh()
         let nc = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             observers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refresh() })
+        }
+        // Hold øje med USB'en: retter du noget i rekordbox, opdateres MODULR af sig selv.
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.watch() }
+        RunLoop.main.add(t, forMode: .common)
+        watchTimer = t
+    }
+
+    private func signature(_ d: UsbDrive) -> String {
+        let fm = FileManager.default
+        var parts = [String]()
+        for rel in ["PIONEER/rekordbox/export.pdb", "PIONEER/rekordbox/exportExt.pdb", "PIONEER/rekordbox/exportLibrary.db"] {
+            let path = d.url.appendingPathComponent(rel).path
+            if let a = try? fm.attributesOfItem(atPath: path) {
+                let m = (a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+                let size = (a[.size] as? NSNumber)?.intValue ?? 0
+                parts.append("\(rel):\(m):\(size)")
+            }
+        }
+        return parts.joined(separator: "|")
+    }
+
+    private func watch() {
+        for d in drives {
+            // Vores egen skrivning og igangværende læsning tæller ikke
+            if writing.contains(d.id) || loading.contains(d.id) { continue }
+            let sig = signature(d)
+            guard !sig.isEmpty else { continue }
+            guard let old = seen[d.id] else { seen[d.id] = sig; continue }
+            if sig == old { settling[d.id] = nil; continue }
+            if settling[d.id] == sig {
+                // Stået stille siden sidste tjek → læs USB'en igen
+                settling[d.id] = nil
+                seen[d.id] = sig
+                load(d)
+            } else {
+                settling[d.id] = sig
+            }
         }
     }
 
@@ -131,6 +173,9 @@ final class UsbStore: ObservableObject {
             return UsbDrive(url: v, name: name)
         }
         for d in drives where contents[d.id] == nil { load(d) }
+        let ids = Set(drives.map(\.id))
+        seen = seen.filter { ids.contains($0.key) }
+        settling = settling.filter { ids.contains($0.key) }
     }
 
     private func run(_ args: [String], input: Data?) throws -> Data {
@@ -161,9 +206,12 @@ final class UsbStore: ObservableObject {
             } catch {
                 result = UsbContents(ok: false, error: error.localizedDescription, tracks: nil, nodes: nil, onelibrary: nil)
             }
+            let sig = self.signature(d)
             DispatchQueue.main.async {
                 self.contents[d.id] = result
                 self.loading.remove(d.id)
+                self.seen[d.id] = sig
+                self.settling[d.id] = nil
             }
         }
     }
@@ -255,12 +303,42 @@ final class UsbStore: ObservableObject {
         }
     }
 
+    /// Skub sikkert ud: spørger først hvis der er noget der ikke er skrevet, og slipper sange fra USB'en i afspilleren.
+    func ejectSafely(_ d: UsbDrive) {
+        if writing.contains(d.id) {
+            message = "Vent – MODULR skriver stadig til \(d.name)."
+            return
+        }
+        let waiting = pending[d.id]?.count ?? 0
+        if waiting > 0 {
+            Dialogs.shared.confirm("Skub \(d.name) ud?",
+                                   message: "\(waiting) ændring\(waiting == 1 ? "" : "er") er ikke skrevet til USB'en endnu og går tabt.",
+                                   icon: "eject.fill", button: "Skub ud alligevel", destructive: true) { [weak self] in
+                self?.pending[d.id] = []
+                self?.eject(d)
+            }
+        } else {
+            eject(d)
+        }
+    }
+
     func eject(_ d: UsbDrive) {
-        do {
-            try NSWorkspace.shared.unmountAndEjectDevice(at: d.url)
-            message = "\(d.name) er skubbet ud – klar til CDJ'en."
-        } catch {
-            message = "Kunne ikke skubbe \(d.name) ud: \(error.localizedDescription)"
+        PlayerModel.shared.release(under: d.url)
+        message = "Skubber \(d.name) ud …"
+        let url = d.url
+        DispatchQueue.global(qos: .userInitiated).async {
+            var err: Error?
+            do { try NSWorkspace.shared.unmountAndEjectDevice(at: url) } catch { err = error }
+            DispatchQueue.main.async {
+                if let err {
+                    self.message = "Kunne ikke skubbe \(d.name) ud: \(err.localizedDescription) – luk andre programmer der bruger USB'en (fx rekordbox) og prøv igen."
+                } else {
+                    self.message = "⏏︎ \(d.name) er skubbet ud – klar til CDJ'en."
+                    self.contents[d.id] = nil
+                    self.pending[d.id] = nil
+                    self.refresh()
+                }
+            }
         }
     }
 }

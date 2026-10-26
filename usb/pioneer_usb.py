@@ -776,6 +776,12 @@ def write_usb(root, plan):
     for t in (T_TRACKS, T_ARTISTS, T_ALBUMS, T_KEYS, T_PLAYLIST_TREE, T_PLAYLIST_ENTRIES, T_ARTWORK, T_GENRES):
         before = old.all(t)
         after = check.all(t)
+        if t == T_PLAYLIST_TREE:
+            # Nye playlister lægges øverst, så søskende rykker én ned – rækkefølgen må ændre sig,
+            # men alle mapper og playlister skal stadig være der med samme navn og placering.
+            def strip(rows):
+                return [{k: v for k, v in r.items() if k != "sort"} for r in rows]
+            before, after = strip(before), strip(after)
         if len(after) < len(before) or any(b not in after for b in before):
             raise PdbError("Kontrol fejlede for tabel %d – intet er ændret på USB'en" % t)
 

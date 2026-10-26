@@ -542,6 +542,17 @@ final class PlayerModel: ObservableObject {
         playing = false
     }
 
+    /// Slip filer på et USB-stik (så det kan skubbes ud).
+    func release(under root: URL) {
+        let base = root.standardizedFileURL.path + "/"
+        guard let t = track, t.path.hasPrefix(base) else { return }
+        stop()
+        file = nil
+        track = nil
+        listQueue.removeAll { $0.path.hasPrefix(base) }
+        updateNowPlaying()
+    }
+
     func resetClip() {
         clipped = false
         holdDB = -80

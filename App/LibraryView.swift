@@ -332,6 +332,7 @@ struct NodeRow: View {
     let prompt: (String, String, @escaping (String) -> Void) -> Void
     @State private var open = true
     @State private var targeted = false
+    @State private var hover = false
 
     var body: some View {
         VStack(spacing: 2) {
@@ -339,18 +340,27 @@ struct NodeRow: View {
                 if node.isFolder {
                     Button { open.toggle() } label: {
                         Image(systemName: open ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.5)).frame(width: 14)
+                            .font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.5)).frame(width: 18, height: 26).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Color.clear.frame(width: 14)
+                    Color.clear.frame(width: 18)
                 }
                 SideRow(icon: node.isFolder ? "folder.fill" : "music.note.list", title: node.name,
                         count: node.isFolder ? nil : node.trackIDs.count, active: ui.selection == .node(node.id)) {
                     ui.selection = .node(node.id)
                 }
+                if node.isFolder {
+                    RowPlus(visible: hover || ui.selection == .node(node.id)) {
+                        [
+                            .action("Ny playliste i \(node.name)", icon: "music.note.list") { open = true; prompt("Ny playliste", "Ny playliste") { _ = library.createNode(name: $0, parent: node.id, folder: false) } },
+                            .action("Ny mappe i \(node.name)", icon: "folder.fill.badge.plus") { open = true; prompt("Ny mappe", "Ny mappe") { _ = library.createNode(name: $0, parent: node.id, folder: true) } },
+                        ]
+                    }
+                }
             }
             .padding(.leading, CGFloat(depth) * 14)
+            .onHover { hover = $0 }
             .background(RoundedRectangle(cornerRadius: 8).stroke(targeted ? Color.ember : Color.clear, lineWidth: 1.5))
             .draggable("node:\(node.id.uuidString)")
             .dropDestination(for: String.self) { items, _ in
@@ -1072,6 +1082,7 @@ struct UsbTree: View {
     let drive: UsbDrive
     let prompt: (String, String, @escaping (String) -> Void) -> Void
     @State private var open = true
+    @State private var hover = false
 
     var body: some View {
         let c = usb.contents[drive.id]
@@ -1080,19 +1091,27 @@ struct UsbTree: View {
             HStack(spacing: 0) {
                 Button { open.toggle() } label: {
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.mist.opacity(0.5)).frame(width: 14)
+                        .foregroundColor(.mist.opacity(0.5)).frame(width: 18, height: 26).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 SideRow(icon: "externaldrive.fill", title: drive.name, count: c?.tracks?.count,
                         active: ui.selection == .usb(drive.id, nil)) { ui.selection = .usb(drive.id, nil) }
+                RowPlus(visible: hover || ui.selection == .usb(drive.id, nil)) {
+                    [
+                        .action("Ny playliste på \(drive.name)", icon: "music.note.list") { open = true; prompt("Ny playliste på \(drive.name)", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .root) } },
+                        .action("Ny mappe på \(drive.name)", icon: "folder.fill.badge.plus") { open = true; prompt("Ny mappe på \(drive.name)", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .root) } },
+                    ]
+                }
+                EjectButton(busy: usb.writing.contains(drive.id)) { usb.ejectSafely(drive) }
             }
+            .onHover { hover = $0 }
             .modMenu(title: drive.name, subtitle: "rekordbox-USB") {
                 [
                     .action("Ny playliste…", icon: "music.note.list") { prompt("Ny playliste på \(drive.name)", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .root) } },
                     .action("Ny mappe…", icon: "folder.fill.badge.plus") { prompt("Ny mappe på \(drive.name)", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .root) } },
                     .divider,
                     .action("Læs igen", icon: "arrow.clockwise") { usb.load(drive) },
-                    .action("Skub ud", icon: "eject.fill") { usb.eject(drive) },
+                    .action("Skub ud", icon: "eject.fill") { usb.ejectSafely(drive) },
                 ]
             }
             if open {
@@ -1148,6 +1167,7 @@ struct UsbNodeTree: View {
     let depth: Int
     let prompt: (String, String, @escaping (String) -> Void) -> Void
     @State private var openFolders: Set<Int> = []        // mapper er lukkede, til du åbner dem
+    @State private var hovered: Int?
 
     init(drive: UsbDrive, parent: Int, depth: Int, prompt: @escaping (String, String, @escaping (String) -> Void) -> Void) {
         self.drive = drive
@@ -1189,11 +1209,11 @@ struct UsbNodeTree: View {
                         if openFolders.contains(n.id) { openFolders.remove(n.id) } else { openFolders.insert(n.id) }
                     } label: {
                         Image(systemName: openFolders.contains(n.id) ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.5)).frame(width: 14)
+                            .font(.system(size: 9, weight: .bold)).foregroundColor(.mist.opacity(0.5)).frame(width: 18, height: 26).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 } else {
-                    Color.clear.frame(width: 14)
+                    Color.clear.frame(width: 18)
                 }
                 SideRow(icon: n.folder ? "folder" : "music.note.list", title: n.name + (added > 0 ? "  +\(added)" : ""),
                         count: n.folder ? nil : n.tracks.count, active: ui.selection == .usb(drive.id, n.id)) {
@@ -1202,8 +1222,17 @@ struct UsbNodeTree: View {
                     }
                     ui.selection = .usb(drive.id, n.id)
                 }
+                if n.folder {
+                    RowPlus(visible: hovered == n.id || ui.selection == .usb(drive.id, n.id)) {
+                        openFolders.insert(n.id)
+                        return usbFolderMenu(n)
+                    }
+                }
             }
             .padding(.leading, CGFloat(depth - 1) * 14)
+            .onHover { inside in
+                if inside { hovered = n.id } else if hovered == n.id { hovered = nil }
+            }
             .dropDestination(for: String.self) { items, _ in
                 guard !n.folder else { return false }
                 let ids = items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
@@ -1230,6 +1259,61 @@ struct UsbNodeTree: View {
     }
 }
 
+/// Lille + ved siden af en mappe: ny playliste eller mappe uden højreklik. Vises når musen er over rækken.
+struct RowPlus: View {
+    let visible: Bool
+    let items: () -> [MMItem]
+    @State private var hover = false
+
+    init(visible: Bool, items: @escaping () -> [MMItem]) {
+        self.visible = visible
+        self.items = items
+    }
+
+    var body: some View {
+        ModMenuButton(items: items) {
+            Image(systemName: "plus")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(hover ? .ember : .mist.opacity(0.6))
+                .frame(width: 22, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
+                .contentShape(Rectangle())
+        }
+        .onHover { hover = $0 }
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .help("Ny playliste eller mappe")
+    }
+}
+
+/// ⏏︎ ved siden af USB-navnet: skub sikkert ud.
+struct EjectButton: View {
+    let busy: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    init(busy: Bool, action: @escaping () -> Void) {
+        self.busy = busy
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "eject.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(hover ? .ember : .mist.opacity(0.55))
+                .frame(width: 22, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.08 : 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .disabled(busy)
+        .opacity(busy ? 0.3 : 1)
+        .help("Skub USB'en sikkert ud")
+    }
+}
+
 // MARK: - USB i hovedområdet
 
 struct UsbHeader: View {
@@ -1252,7 +1336,7 @@ struct UsbHeader: View {
                         .buttonStyle(.ember)
                         .disabled(usb.writing.contains(drive.id))
                 }
-                Button("Skub ud") { usb.eject(drive) }.disabled(usb.writing.contains(drive.id))
+                Button("Skub ud") { usb.ejectSafely(drive) }.disabled(usb.writing.contains(drive.id))
             }
             if usb.contents[drive.id]?.onelibrary == true {
                 Text("Denne USB har også et OneLibrary (CDJ-3000X, XDJ-AZ, Opus Quad). MODULR skriver i Device Library, som CDJ-3000 læser. Til 3000X: sæt USB'en i rekordbox 7, højreklik på \"OneLibrary\" og vælg \"Convert from Device Library\".")
