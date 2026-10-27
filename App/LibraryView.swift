@@ -185,12 +185,10 @@ struct LibrarySidebar: View {
                 VStack(spacing: 2) {
                     ForEach(SmartList.allCases) { s in
                         let count = library.index.tracks.filter(s.matches).count
-                        SideRow(icon: s.icon, title: s.rawValue, count: count, active: ui.selection == .smart(s)) {
-                            ui.selection = .smart(s)
-                        }
-                        .dropDestination(for: URL.self) { urls, _ in
-                            library.importDropped(urls)
-                            return true
+                        FileDropRow { urls in library.importDropped(urls) } content: {
+                            SideRow(icon: s.icon, title: s.rawValue, count: count, active: ui.selection == .smart(s)) {
+                                ui.selection = .smart(s)
+                            }
                         }
                     }
                 }
@@ -268,6 +266,25 @@ struct LibrarySidebar: View {
             if case .node(let id) = ui.selection, library.index.nodes.first(where: { $0.id == id })?.isFolder == false { target = id }
             library.importDropped(p.urls, into: target)
         }
+    }
+}
+
+/// En sidebar-række der tager imod filer fra Finder og lyser op, mens man trækker hen over den.
+struct FileDropRow<Content: View>: View {
+    let onFiles: ([URL]) -> Void
+    @ViewBuilder let content: Content
+    @State private var targeted = false
+
+    init(onFiles: @escaping ([URL]) -> Void, @ViewBuilder content: () -> Content) {
+        self.onFiles = onFiles
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(targeted ? Color.ember : Color.clear, lineWidth: 1.5))
+            .animation(Motion.hover, value: targeted)
+            .fileDrop(targeted: $targeted, files: onFiles)
     }
 }
 
@@ -365,7 +382,7 @@ struct NodeRow: View {
             .onHover { hover = $0 }
             .background(RoundedRectangle(cornerRadius: 8).stroke(targeted ? Color.ember : Color.clear, lineWidth: 1.5))
             .draggable("node:\(node.id.uuidString)")
-            .dropDestination(for: String.self) { items, _ in
+            .fileDrop(targeted: $targeted, strings: { items in
                 for s in items {
                     if s.hasPrefix("node:"), let id = UUID(uuidString: String(s.dropFirst(5))), node.isFolder {
                         library.move(id, under: node.id)
@@ -376,8 +393,10 @@ struct NodeRow: View {
                         library.importFromUsb(UsbDragItem.files(s), into: node.id)
                     }
                 }
-                return true
-            } isTargeted: { targeted = $0 }
+            }, files: { urls in
+                // Filer fra skrivebordet, Downloads osv.: ind i playlisten (på en mappe: bare ind i biblioteket)
+                library.importDropped(urls, into: node.isFolder ? nil : node.id)
+            })
             .modMenu(title: node.name, subtitle: node.isFolder ? "Mappe" : "\(node.trackIDs.count) sange") { nodeMenu() }
             if node.isFolder && open {
                 NodeTree(parent: node.id, depth: depth + 1, prompt: prompt)
@@ -722,6 +741,9 @@ struct TrackListView: View {
                     ForEach(rows) { t in
                         TableRow(t)
                             .draggable(dragPayload(for: t))
+                            .dropDestination(for: URL.self) { urls in
+                                library.importDropped(urls.filter(\.isFileURL), into: currentPlaylist)
+                            }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -761,12 +783,23 @@ struct TrackListView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
+                .fileDrop(targeted: $targeted) { urls in library.importDropped(urls, into: currentPlaylist) }
+                .overlay {
+                    if targeted {
+                        DropHint(text: dropHintText).padding(.horizontal, 12).padding(.bottom, 12)
+                    }
+                }
+                .animation(Motion.hover, value: targeted)
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            library.importDropped(urls, into: currentPlaylist)
-            return true
-        } isTargeted: { targeted = $0 }
+        .fileDrop(targeted: $targeted) { urls in library.importDropped(urls, into: currentPlaylist) }
+    }
+
+    var dropHintText: String {
+        if let pl = currentPlaylist, let n = library.index.nodes.first(where: { $0.id == pl }) {
+            return "Slip for at tilføje til \(n.name)"
+        }
+        return "Slip for at tilføje til biblioteket"
     }
 
     func dragPayload(for t: LibTrack) -> String {
