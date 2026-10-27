@@ -1041,6 +1041,12 @@ final class LibraryStore: ObservableObject {
         let cueMs = PlayerModel.autoCue(for: t, peaks: peaks(t)) * 1000
         if (t.bpm ?? 0) > 0, !memory.contains(where: { abs($0 - cueMs) < 5 }) { memory.append(cueMs) }
         analysis["memory_cues"] = memory.sorted()
+        // Sangens opbygning → phrases på CDJ-3000 (intro/up/down/chorus/outro som rekordbox)
+        if let bpm = t.bpm, bpm > 0, let dur = t.duration, dur > 0 {
+            let secs = SongStructure.analyze(bands: bands(t), bpm: bpm, firstBeat: (t.firstBeatMs ?? 0) / 1000, duration: dur)
+            analysis["phrases"] = secs.map { ["beat": $0.startBar * BeatGrid.beatsPerBar + 1, "kind": $0.kind.rawValue] as [String: Any] }
+            if let last = secs.last { analysis["phrase_end_beat"] = last.endBar * BeatGrid.beatsPerBar }
+        }
         d["analysis"] = analysis
         return d
     }

@@ -84,11 +84,26 @@ Kontrol: alle 82 rigtige rekordbox-indstillingsfiler i rekordcrates testdata læ
   skriv atomisk (tmp + rename). Filer slettes først efter databasen er gemt.
 - Rekordbox' egne analysefiler røres aldrig; MODULRs mapper har en `.modulr`-mærkefil.
 
+## PQT2 og PSSI (afkodet fra KNOWN MUSIC)
+
+**PSSI (phrases)** – skrives nu. 24-byte poster: index, startslag (1-baseret i PQTZ), type, flag. Mood 1 = High:
+1 Intro, 2 Up, 3 Down, 5 Chorus, 6 Outro. MODULR: intro→1, groove/buildup→2, breakdown→3, drop→5, outro→6.
+Alt fra mood og frem XOR-maskeres med `(nøgle[i] + antal) mod 256`. Kontrol: rekordbox' egne PSSI fra tre sange
+genopbygges byte-identisk, og rekordcrate læser MODULRs.
+
+**PQT2 (udvidet beatgrid)** – skrives IKKE. Header: første slag (u16 taktslag, u16 tempo×100, u32 ms), sidste slag,
+antal slag, og en u32 vi ikke kan genskabe (ikke sum/tid/CRC). Indhold: u16 pr. slag = tusindedele af ms
+(PQTZ har kun hele ms, rundet NED). En forkert værdi kan få spilleren til at afvise .EXT, og ingen af de
+hardware-testede projekter skriver den – derfor udeladt.
+
+**PQTZ** rundes nu ned til hele ms som rekordbox.
+
 ## Ikke lavet endnu
 
-- PSSI (phrases/sangens opbygning til CDJ-3000) – format kendt (rekordcrate `anlz.rs`, XOR-maske pr. antal faser).
-- Hot cues/grid fra USB'en ind i biblioteket ved import.
-- PVBR for VBR-MP3 (rigtige byte-offsets).
+- PQT2 (se ovenfor).
+- Loops og cue-navne (MODULR har ikke loops/navne i sin model endnu).
+- PVBR for VBR-MP3 (kræver en rekordbox-reference fra en VBR-fil).
+- Hot cues/grid fra USB'en ind i biblioteket ved import, og ændringer lavet på CDJ'en.
 - OneLibrary.
 
 ## Kilder

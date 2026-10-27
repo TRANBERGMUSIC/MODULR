@@ -595,15 +595,9 @@ def _ppth(path):
 
 def _pqtz(bpm, first_beat_ms, duration_s):
     """Beatgrid: én række per slag med takt-position, tempo (×100) og tid i ms."""
-    beats = []
-    if bpm > 0:
-        step = 60000.0 / bpm
-        t = first_beat_ms
-        n = 0
-        while t < duration_s * 1000.0:
-            beats.append(struct.pack(">HHI", (n % 4) + 1, int(round(bpm * 100)), int(round(t))))
-            t += step
-            n += 1
+    # rekordbox gemmer hele millisekunder rundet NED (55,873 ms → 55)
+    beats = [struct.pack(">HHI", (n % 4) + 1, int(round(bpm * 100)), int(t))
+             for n, t in enumerate(_beat_times(bpm, first_beat_ms, duration_s))]
     body = b"".join(beats)
     return _tag(b"PQTZ", struct.pack(">III", 0, 0x00080000, len(beats)), body)
 
@@ -704,6 +698,56 @@ def _pwv4(cols6):
 def _pwv5(words):
     body = b"".join(struct.pack(">H", w) for w in words)
     return _tag(b"PWV5", struct.pack(">III", 2, len(words), 0x00960305), body)
+
+
+PSSI_KEY = [0xCB, 0xE1, 0xEE, 0xFA, 0xE5, 0xEE, 0xAD, 0xEE, 0xE9, 0xD2, 0xE9, 0xEB, 0xE1, 0xE9, 0xF3, 0xE8, 0xE9, 0xF4, 0xE1]
+# MODULRs sektioner → rekordbox' phrase-typer i mood "High" (elektronisk musik)
+PHRASE_KIND = {"intro": 1, "main": 2, "buildup": 2, "breakdown": 3, "drop": 5, "outro": 6}
+
+
+def _pssi(phrases, beat_count, end_hint=None):
+    """Sangens opbygning til CDJ-3000 (PHRASE-visning, Lighting). Format som rekordbox 6/7 skriver det:
+    u32 24 · u16 antal · [mood u16 · u32 0 · u16 0 · end_beat u16 · u16 0 · bank u8 · u8 0] · 24 bytes pr. phrase.
+    Alt fra mood og frem er XOR-maskeret med en nøgle der afhænger af antallet (som rekordbox gør)."""
+    rows = []
+    last = 0
+    for ph in sorted(phrases or [], key=lambda p: int(p.get("beat", 0))):
+        beat = int(ph.get("beat", 0))
+        kind = PHRASE_KIND.get(ph.get("kind"), 0)
+        if kind == 0 or beat < 1 or (beat_count and beat > beat_count) or beat <= last:
+            continue
+        rows.append((beat, kind))
+        last = beat
+    if not rows:
+        return None
+    end_beat = int(end_hint) if end_hint else (int(beat_count) - 1 if beat_count else rows[-1][0])
+    if beat_count:
+        end_beat = min(end_beat, int(beat_count))
+    n = len(rows)
+    data = struct.pack(">HIHHHBB", 1, 0, 0, max(rows[-1][0], end_beat), 0, 0, 0)
+    for i, (beat, kind) in enumerate(rows):
+        data += struct.pack(">HHHBBBBBBHHHBBBBH", i + 1, beat, kind, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    key = [(k + n) % 256 for k in PSSI_KEY]
+    masked = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    # 14 bytes af den maskerede del hører til tag-headeren (len_header = 32), resten er phrases
+    return _tag(b"PSSI", struct.pack(">IH", 24, n) + masked[:14], masked[14:])
+
+
+def _beat_times(bpm, first_beat_ms, duration_s):
+    """Slagenes præcise tider i ms – samme liste som PQTZ skrives fra."""
+    out = []
+    if bpm > 0:
+        step = 60000.0 / bpm
+        t = float(first_beat_ms)
+        while t < duration_s * 1000.0:
+            if t >= 0:
+                out.append(t)
+            t += step
+    return out
+
+
+def _pqtz_count(bpm, first_beat_ms, duration_s):
+    return len(_beat_times(bpm, first_beat_ms, duration_s))
 
 
 def _pwv6(cols3):
@@ -832,6 +876,19 @@ def is_modulr_anlz(analyze_path, folder):
     return bool(n and n[0] >= 0x800 and not os.path.exists(os.path.join(folder, "ANLZ0000.2EX")))
 
 
+def may_write_anlz(root, analyze_path, usb_rel):
+    """MODULR må skrive sangens analyse, medmindre rekordbox' egen analyse ligger der (i databasens mappe
+    eller i den mappe CDJ'en kigger i). MODULR-mapper har et mærke; mangler analysen helt, må vi også."""
+    for rel in {analyze_path or "", anlz_hash_path(usb_rel)}:
+        if not rel:
+            continue
+        folder = os.path.join(root, os.path.dirname(rel).lstrip("/"))
+        has_files = any(os.path.exists(os.path.join(folder, "ANLZ0000." + e)) for e in ("DAT", "EXT", "2EX"))
+        if has_files and not is_modulr_anlz(rel, folder):
+            return False
+    return True
+
+
 def anlz_hash_path(usb_rel):
     """Den sti CDJ'en SELV regner ud fra lydfilens sti – spilleren ignorerer analyze_path i databasen.
     rekordbox' CreateAnlzFileFolderPath (fundet af rhythmbox-to-pioneer-xdj-exporter, PIONEER.md):
@@ -908,8 +965,12 @@ def write_anlz(folder, usb_path, analysis):
         samples = int(round(dur * float(analysis.get("sample_rate") or 44100)))
     dat = _anlz_file([_ppth(usb_path), _pvbr(samples), _pqtz(bpm, first, dur), _pwav(pwav), _pwv2(tiny),
                       _pcob(1, cues), _pcob(0, cues)])
-    ext = _anlz_file([_ppth(usb_path), _pwv3(detail), _pcob(1, cues), _pcob(0, cues), _pco2(1, cues), _pco2(0, cues),
-                      _pwv5(cdet), _pwv4(cprev)])
+    sections = [_ppth(usb_path), _pwv3(detail), _pcob(1, cues), _pcob(0, cues), _pco2(1, cues), _pco2(0, cues),
+                _pwv5(cdet), _pwv4(cprev)]
+    pssi = _pssi(analysis.get("phrases"), _pqtz_count(bpm, first, dur), analysis.get("phrase_end_beat"))
+    if pssi:
+        sections.append(pssi)                      # rekordbox lægger PSSI sidst i .EXT
+    ext = _anlz_file(sections)
     ex2 = _anlz_file([_ppth(usb_path), _pwv7(p7), _pwv6(p6), _pwvc((0x5B, 0x8A, 0x18C))])
     for name, data in (("ANLZ0000.DAT", dat), ("ANLZ0000.EXT", ext), ("ANLZ0000.2EX", ex2), (MODULR_MARK, b"MODULR\n")):
         with open(os.path.join(folder, name), "wb") as f:
@@ -1140,7 +1201,7 @@ def write_usb(root, plan):
             # (rekordbox' egne analysefiler røres aldrig.)
             ap = anlz_by_path.get(usb_rel, "")
             folder = os.path.join(root, os.path.dirname(ap).lstrip("/")) if ap else ""
-            if is_modulr_anlz(ap, folder) and tr.get("analysis"):
+            if may_write_anlz(root, ap, usb_rel) and tr.get("analysis"):
                 tr["analysis"].setdefault("sample_rate", tr.get("sample_rate") or 44100)
                 if ap != anlz_hash_path(usb_rel):
                     # Lagt på af en ældre MODULR i en mappe CDJ'en ikke kigger i → flyt derhen hvor den kigger

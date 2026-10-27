@@ -1721,6 +1721,8 @@ struct UsbPlaylistView: View {
                 Table(of: UsbTrackInfo.self, selection: $selection) {
                     TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
                         .width(30)
+                    TableColumn("Waveform på CDJ") { (t: UsbTrackInfo) in UsbWaveCell(track: t, root: d.url) }
+                        .width(min: 110, ideal: 200, max: 420)
                     TableColumn("") { (t: UsbTrackInfo) in UsbCoverCell(track: t, root: d.url) }
                         .width(30)
                     TableColumn("Kunstner") { (t: UsbTrackInfo) in UsbTextCell(text: t.artist, alpha: 0.85) }

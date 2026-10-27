@@ -175,6 +175,8 @@ final class UsbStore: ObservableObject {
     @Published var pending: [String: [UsbPending]] = [:]
     @Published var writing: Set<String> = []
     @Published var message: String?
+    /// Tælles op hver gang en USB er læst igen (så waveform-cellerne genindlæser fra stikket).
+    @Published var revision = 0
 
     private var observers: [NSObjectProtocol] = []
     private var watchTimer: Timer?
@@ -317,6 +319,7 @@ final class UsbStore: ObservableObject {
             DispatchQueue.main.async {
                 self.contents[d.id] = result
                 self.loading.remove(d.id)
+                self.revision += 1
                 self.seen[d.id] = sig
                 self.settling[d.id] = nil
             }
