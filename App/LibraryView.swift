@@ -1821,6 +1821,9 @@ struct UsbPlaylistView: View {
             ]))
         }
         items.append(.divider)
+        items.append(.action("Opdatér fra MODULR (waveform, grid og cues)", icon: "arrow.triangle.2.circlepath") {
+            usb.refreshFromLibrary(d, tracks: ids, library: library)
+        })
         items.append(.action("Importér til biblioteket", icon: "square.and.arrow.down") { library.importFromUsb(files) })
         items.append(.action("Kopiér til computeren…", icon: "folder") { Self.copyToComputer(files) })
         items.append(.action("Vis i Finder", icon: "magnifyingglass") { NSWorkspace.shared.activateFileViewerSelecting(files) })

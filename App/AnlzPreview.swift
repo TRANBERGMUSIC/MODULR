@@ -57,6 +57,61 @@ enum AnlzReader {
         let columns: [(h: Double, r: Double, g: Double, b: Double)]
     }
 
+    struct Cue {
+        let slot: Int             // 1 = A … 8 = H
+        let ms: Double
+        let rgb: (Double, Double, Double)
+    }
+
+    /// Hot cues A–H som CDJ'en læser dem (PCO2 i .EXT).
+    static func hotCues(root: URL, trackPath: String) -> [Cue] {
+        let rel = hashPath(trackPath)
+        let ext = root.appendingPathComponent(String(rel.dropFirst())).deletingPathExtension().appendingPathExtension("EXT")
+        guard let d = try? Data(contentsOf: ext) else { return [] }
+        var out = [Cue]()
+        var o = u32(d, 4)
+        while o + 12 <= d.count {
+            let hl = u32(d, o + 4), tl = u32(d, o + 8)
+            guard tl >= hl, tl > 0, o + tl <= d.count else { break }
+            if d.subdata(in: (d.startIndex + o)..<(d.startIndex + o + 4)) == Data("PCO2".utf8), u32(d, o + 12) == 1 {
+                var q = o + hl
+                while q + 0x1C <= o + tl {
+                    let len = u32(d, q + 8)
+                    guard len >= 0x1C, q + len <= o + tl else { break }
+                    let slot = u32(d, q + 12)
+                    let ms = Double(u32(d, q + 0x14))
+                    var rgb = (0.0, 1.0, 0.0)
+                    if len >= 0x30 {
+                        let lc = u32(d, q + 0x28)
+                        let at = q + 0x2C + lc
+                        if at + 4 <= q + len {
+                            let b = d.startIndex + at
+                            rgb = (Double(d[b + 1]) / 255, Double(d[b + 2]) / 255, Double(d[b + 3]) / 255)
+                        }
+                    }
+                    if (1...8).contains(slot) { out.append(Cue(slot: slot, ms: ms, rgb: rgb)) }
+                    q += len
+                }
+            }
+            o += tl
+        }
+        return out.sorted { $0.slot < $1.slot }
+    }
+
+    /// MODULRs formatversion i mærkefilen (nil = ikke MODULR, 0 = ældre MODULR uden version).
+    static func modulrFormat(root: URL, trackPath: String) -> Int? {
+        let rel = hashPath(trackPath)
+        let mark = root.appendingPathComponent(String(rel.dropFirst())).deletingLastPathComponent().appendingPathComponent(".modulr")
+        guard let txt = try? String(contentsOf: mark, encoding: .utf8) else { return nil }
+        for line in txt.split(separator: "\n") where line.hasPrefix("format=") {
+            return Int(line.dropFirst("format=".count)) ?? 0
+        }
+        return 0
+    }
+
+    /// Den version USB-modulet skriver nu (usb/pioneer_usb.py: ANLZ_FORMAT).
+    static let currentFormat = 3
+
     /// RGB-oversigten (PWV4 i .EXT) – ellers den blå (PWAV i .DAT).
     static func preview(root: URL, trackPath: String) -> Preview {
         let rel = hashPath(trackPath)
@@ -195,6 +250,8 @@ struct UsbWaveCell: View {
     let root: URL
     @State private var image: CGImage?
     @State private var kind: AnlzReader.Kind?
+    @State private var cues: [AnlzReader.Cue] = []
+    @State private var format: Int?
 
     init(track: UsbTrackInfo, root: URL) {
         self.track = track
@@ -212,6 +269,24 @@ struct UsbWaveCell: View {
                 }
                 .foregroundColor(.amber.opacity(0.8))
             }
+            if image != nil, !cues.isEmpty {
+                GeometryReader { g in
+                    let dur = max(0.001, Double(track.duration) * 1000)
+                    ForEach(cues, id: \.slot) { c in
+                        Text(HotCue.letters[c.slot - 1])
+                            .font(.system(size: 8, weight: .heavy)).foregroundColor(.black)
+                            .frame(width: 10, height: 10)
+                            .background(RoundedRectangle(cornerRadius: 2).fill(Color(red: c.rgb.0, green: c.rgb.1, blue: c.rgb.2)))
+                            .offset(x: min(g.size.width - 10, max(0, g.size.width * CGFloat(c.ms / dur) - 5)), y: 1)
+                    }
+                }
+            }
+            if let f = format, f < AnlzReader.currentFormat {
+                Text("FORÆLDET").font(.system(size: 8, weight: .heavy)).foregroundColor(.black)
+                    .padding(.horizontal, 3).background(RoundedRectangle(cornerRadius: 2).fill(Color.amber))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .help("Lagt på med en ældre MODULR – højreklik → Opdatér fra MODULR")
+            }
             if kind == .blue {
                 Text("BLÅ").font(.system(size: 8, weight: .heavy)).foregroundColor(.white.opacity(0.8))
                     .padding(.horizontal, 3).background(RoundedRectangle(cornerRadius: 2).fill(Color.black.opacity(0.5)))
@@ -224,9 +299,14 @@ struct UsbWaveCell: View {
               : "CDJ'en finder ingen analysefiler til denne sang")
         .task(id: "\(root.path)|\(track.path)|\(UsbStore.shared.revision)") {
             let r = root, p = track.path
-            let res = await Task.detached(priority: .utility) { UsbWaveCache.shared.get(root: r, trackPath: p, width: 400, height: 48) }.value
+            let res = await Task.detached(priority: .utility) { UsbWaveCache.shared.get(root: r, trackPath: p, width: 600, height: 44) }.value
+            let extra = await Task.detached(priority: .utility) {
+                (AnlzReader.hotCues(root: r, trackPath: p), AnlzReader.modulrFormat(root: r, trackPath: p))
+            }.value
             image = res.1
             kind = res.0
+            cues = extra.0
+            format = extra.1
         }
     }
 }

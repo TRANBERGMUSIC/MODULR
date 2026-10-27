@@ -875,6 +875,9 @@ def three_band(bands):
 
 
 MODULR_MARK = ".modulr"
+# Tælles op hver gang MODULRs analysefiler ændrer udseende/indhold (så appen kan se forældede sange på stikket).
+# 3 = rekordbox-farver (RB_WEIGHTS), hot cues A–C kun i PCO2, phrases.
+ANLZ_FORMAT = 3
 
 
 def anlz_folder_number(analyze_path):
@@ -988,7 +991,7 @@ def write_anlz(folder, usb_path, analysis):
         sections.append(pssi)                      # rekordbox lægger PSSI sidst i .EXT
     ext = _anlz_file(sections)
     ex2 = _anlz_file([_ppth(usb_path), _pwv7(p7), _pwv6(p6), _pwvc((0x5B, 0x8A, 0x18C))])
-    for name, data in (("ANLZ0000.DAT", dat), ("ANLZ0000.EXT", ext), ("ANLZ0000.2EX", ex2), (MODULR_MARK, b"MODULR\n")):
+    for name, data in (("ANLZ0000.DAT", dat), ("ANLZ0000.EXT", ext), ("ANLZ0000.2EX", ex2), (MODULR_MARK, ("MODULR\nformat=%d\n" % ANLZ_FORMAT).encode())):
         with open(os.path.join(folder, name), "wb") as f:
             f.write(data)
 
@@ -1302,6 +1305,29 @@ def write_usb(root, plan):
         keymap[pl["key"]] = pid
         for tr in pl.get("tracks", []):
             db.add_playlist_entry(pid, ensure_track(tr))
+    # Opdatér analysen på sange der allerede ligger på stikket – ramt via track-id, aldrig en ny kopi
+    rows = {t["id"]: t for t in db.all(T_TRACKS)}
+    for item in plan.get("refresh", []):
+        row = rows.get(int(item.get("usb_track_id", 0)))
+        an = (item.get("track") or {}).get("analysis")
+        if not row or not an:
+            continue
+        usb_rel = row["path"]
+        ap = row.get("analyze_path") or ""
+        if not may_write_anlz(root, ap, usb_rel):
+            log.append("Sprunget over (rekordbox' egen analyse): " + row["title"])
+            continue
+        an.setdefault("sample_rate", row.get("sample_rate") or 44100)
+        want = anlz_hash_path(usb_rel)
+        if ap != want:
+            if taken_anlz["owner"].get(want) not in (None, usb_rel):
+                log.append("⚠︎ Analysemappen deles med en anden sang – springes over: " + row["title"])
+                continue
+            if db.set_analyze_path(row["id"], want):
+                moved_anlz.add(row["id"])
+                taken_anlz["owner"][want] = usb_rel
+        write_anlz(os.path.join(root, os.path.dirname(want).lstrip("/")), usb_rel, an)
+        log.append("Opdateret waveform, grid og cues: " + row["title"])
     for add in plan.get("add_to", []):
         pid = resolve_parent(add["playlist"])
         for tr in add.get("tracks", []):

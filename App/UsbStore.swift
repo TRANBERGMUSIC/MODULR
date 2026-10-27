@@ -515,6 +515,48 @@ final class UsbStore: ObservableObject {
         }
     }
 
+    /// Send MODULRs nyeste analyse (waveform, grid, cues, phrases) til sange der allerede ligger på stikket.
+    /// Kun sange der også er i biblioteket; rekordbox' egne analyser røres aldrig.
+    func refreshFromLibrary(_ d: UsbDrive, tracks ids: [Int], library: LibraryStore) {
+        let usbTracks = (contents[d.id]?.tracks ?? []).filter { ids.contains($0.id) }
+        let pairs: [(Int, LibTrack)] = usbTracks.compactMap { u in
+            let lib = u.playable(root: d.url)
+            return library.index.track(lib.id) != nil ? (u.id, lib) : nil
+        }
+        guard !pairs.isEmpty else {
+            message = "Sangen findes ikke i MODULRs bibliotek – importér den først (højreklik → Importér til biblioteket)."
+            return
+        }
+        guard !writing.contains(d.id) else { return }
+        writing.insert(d.id)
+        message = "Opdaterer \(pairs.count) sang\(pairs.count == 1 ? "" : "e") på \(d.name) …"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("MODULR-usb-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            let items: [[String: Any]] = pairs.map { ["usb_track_id": $0.0, "track": library.usbTrack($0.1, tempDir: tmp)] }
+            let plan: [String: Any] = ["folders": [], "playlists": [], "add_to": [], "refresh": items]
+            var text: String
+            do {
+                let data = try self.run(["write", d.url.path], input: try JSONSerialization.data(withJSONObject: plan))
+                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if obj?["ok"] as? Bool == true {
+                    let n = ((obj?["log"] as? [String]) ?? []).filter { $0.hasPrefix("Opdateret") }.count
+                    text = "✅ \(n) sang\(n == 1 ? "" : "e") har nu MODULRs nyeste waveform, grid og cues på \(d.name)."
+                } else {
+                    text = "⛔️ USB'en blev ikke ændret: \(obj?["error"] as? String ?? String(data: data, encoding: .utf8) ?? "ukendt fejl")"
+                }
+            } catch {
+                text = "⛔️ USB'en blev ikke ændret: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self.writing.remove(d.id)
+                self.message = text
+                self.load(d)
+            }
+        }
+    }
+
     func eject(_ d: UsbDrive) {
         PlayerModel.shared.release(under: d.url)
         message = "Skubber \(d.name) ud …"
