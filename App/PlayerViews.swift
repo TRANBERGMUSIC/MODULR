@@ -32,21 +32,29 @@ struct PlayerPanel: View {
                             VStack(spacing: 8) {
                                 DetailWaveform(track: t, zoom: $zoom, gridMode: mode == .grid, showSuggestions: mode == .cues)
                                     .frame(height: 104)
+                                    .revealWipe(trigger: t.id)
                                 VStack(spacing: 2) {
                                     OverviewWaveform(track: t, zoom: zoom).frame(height: 38)
+                                        .revealWipe(trigger: t.id)
                                     BarRuler(track: t).frame(height: 14)
                                     SectionStrip().frame(height: 14)
+                                        .entrance(delay: 0.25, trigger: t.id)
                                 }
                             }
                             DJMMeter()
                                 .frame(width: 52, height: 182)
                         }
-                        switch mode {
-                        case .grid: GridEditBar(track: t)
-                        case .eq: EQPanel(track: t)
-                        case .cues: CueTools(track: t)
-                        case .play: EmptyView()
+                        Group {
+                            switch mode {
+                            case .grid: GridEditBar(track: t)
+                            case .eq: EQPanel(track: t)
+                            case .cues: CueTools(track: t)
+                            case .play: EmptyView()
+                            }
                         }
+                        .id(mode)
+                        .transition(.opacity.combined(with: .offset(y: -6)))
+                        .animation(Motion.snappy, value: mode)
                     }
                 }
             }
@@ -56,18 +64,34 @@ struct PlayerPanel: View {
     @ViewBuilder
     func header(_ t: LibTrack?) -> some View {
         HStack(spacing: 12) {
-            Cover(track: t, size: 44, fallbackURL: player.externalArt)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(t?.title ?? "Dobbeltklik på en sang for at afspille den")
-                    .font(.system(size: 14, weight: .semibold)).foregroundColor(.mist).lineLimit(1)
-                Text(t.map { $0.artist.isEmpty ? "Ukendt kunstner" : $0.artist } ?? "Vælg en sang for at se waveform, grid, EQ og niveau")
-                    .font(.system(size: 12)).foregroundColor(.mist.opacity(0.6)).lineLimit(1)
+            // Signatur: coveret åbner, og titlen skubbes op, når en ny sang loades
+            ZStack {
+                Cover(track: t, size: 44, fallbackURL: player.externalArt)
+                    .id(t?.id)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.92).combined(with: .opacity), removal: .opacity))
             }
+            .frame(width: 44, height: 44)
+            ZStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(t?.title ?? "Dobbeltklik på en sang for at afspille den")
+                        .font(.system(size: 14, weight: .semibold)).foregroundColor(.mist).lineLimit(1)
+                    Text(t.map { $0.artist.isEmpty ? "Ukendt kunstner" : $0.artist } ?? "Vælg en sang for at se waveform, grid, EQ og niveau")
+                        .font(.system(size: 12)).foregroundColor(.mist.opacity(0.6)).lineLimit(1)
+                }
+                .id(t?.id)
+                .transition(.asymmetric(insertion: .push(from: .bottom), removal: .opacity))
+            }
+            .clipped()
             .layoutPriority(1)
             Spacer(minLength: 8)
             if let t {
-                if let k = t.key { KeyPill(key: k) }
+                if let k = t.key {
+                    KeyPill(key: k)
+                        .id(k)
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                }
                 Text(t.bpmText).font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundColor(.mist)
+                    .contentTransition(.numericText(value: t.bpm ?? 0))
                     .fixedSize()
                 if !compact {
                     ModSegmented(selection: $mode, options: [(PlayerMode.play, "Afspil"), (PlayerMode.grid, "Grid"),
@@ -78,8 +102,9 @@ struct PlayerPanel: View {
             Button { player.previous() } label: {
                 Image(systemName: "backward.fill").font(.system(size: 12, weight: .bold)).foregroundColor(.mist.opacity(0.8))
                     .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.press)
             .disabled(t == nil)
             .help("Forrige sang (eller starten af sangen)")
             CDJButtons()
@@ -87,11 +112,14 @@ struct PlayerPanel: View {
             Button { player.next() } label: {
                 Image(systemName: "forward.fill").font(.system(size: 12, weight: .bold)).foregroundColor(.mist.opacity(0.8))
                     .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.press)
             .disabled(t == nil)
             .help("Næste sang")
         }
+        .animation(Motion.reveal, value: t?.id)
+        .animation(Motion.snappy, value: t?.bpm)
     }
 }
 
@@ -117,6 +145,8 @@ struct CDJButtons: View {
                     .foregroundColor(cueLit || (cueBlink && blink) ? CDJButtons.cueOrange : CDJButtons.cueOrange.opacity(0.5))
             }
             .frame(width: 40, height: 40)
+            .scaleEffect(cueDown ? 0.9 : 1)
+            .animation(Motion.press, value: cueDown)
             .contentShape(Circle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { _ in
@@ -139,8 +169,9 @@ struct CDJButtons: View {
                     .foregroundColor(player.playing || blink ? CDJButtons.playGreen : CDJButtons.playGreen.opacity(0.5))
                 }
                 .frame(width: 40, height: 40)
+                .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressScaleStyle(scale: 0.9))
             .help("Play/pause (mellemrum)")
         }
         .onAppear {

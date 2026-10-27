@@ -306,6 +306,8 @@ struct SideRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(Motion.hover, value: hover)
+        .animation(Motion.snappy, value: active)
     }
 }
 
@@ -939,15 +941,25 @@ struct ArtistCell: View {
 
 struct TitleCell: View {
     @ObservedObject private var library = LibraryStore.shared
+    @ObservedObject private var now = NowPlayingKey.shared
     let track: LibTrack
     var body: some View {
         HStack(spacing: 5) {
+            if now.id == track.id {
+                // Den sang der er i afspilleren – bølger mens den spiller (som i Apple Music)
+                Image(systemName: "waveform")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.ember)
+                    .symbolEffect(.variableColor.iterative.reversing, isActive: now.playing)
+                    .transition(.scale.combined(with: .opacity))
+            }
             if library.analyzing.contains(track.id) { ProgressView().controlSize(.mini) }
             if library.working.contains(track.id) {
                 Image(systemName: "arrow.triangle.2.circlepath").foregroundColor(Color.ember)
             }
-            Text(track.title).foregroundColor(Color.mist).lineLimit(1)
+            Text(track.title).foregroundColor(now.id == track.id ? Color.ember : Color.mist).lineLimit(1)
         }
+        .animation(Motion.snappy, value: now.id == track.id)
         .help(track.path)
     }
 }
@@ -1394,12 +1406,15 @@ struct UsbHeader: View {
             }
             if let m = usb.message {
                 Text(m).font(.system(size: 12)).foregroundColor(.mist.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
+                    .id(m)
+                    .transition(.asymmetric(insertion: .push(from: .top), removal: .opacity))
             }
             Text("Træk sange fra biblioteket over på en playliste under USB i venstre side, eller højreklik på sange → Send til USB. Intet skrives, før du trykker \"Skriv til USB\" – og der tages altid backup af rekordbox-databasen først.")
                 .font(.system(size: 11)).foregroundColor(.mist.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+        .animation(Motion.smooth, value: usb.message)
         .sheet(isPresented: $showSettings) {
             UsbSettingsView(drive: drive) { showSettings = false }
                 .environmentObject(usb)

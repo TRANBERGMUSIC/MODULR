@@ -42,14 +42,18 @@ struct RootView: View {
                     PageHeader(icon: model.tool.icon, title: model.tool.rawValue, subtitle: model.tool.subtitle) {
                         EmptyView()
                     }
-                    Group {
-                        switch model.tool {
-                        case .library: LibraryView()
-                        case .bitrate: ContentView()
-                        case .findBetter: FindBetterToolView()
-                        case .artwork: ArtworkToolView()
-                        case .accounts: AccountsView()
+                    ZStack {
+                        Group {
+                            switch model.tool {
+                            case .library: LibraryView()
+                            case .bitrate: ContentView()
+                            case .findBetter: FindBetterToolView()
+                            case .artwork: ArtworkToolView()
+                            case .accounts: AccountsView()
+                            }
                         }
+                        .id(model.tool)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 8)), removal: .opacity))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -72,6 +76,7 @@ struct Sidebar: View {
     @EnvironmentObject var updater: Updater
     @EnvironmentObject var findBetter: FindBetterModel
     @Binding var collapsed: Bool
+    @Namespace private var selection
 
     var body: some View {
         if collapsed { compactBody } else { fullBody }
@@ -87,8 +92,8 @@ struct Sidebar: View {
                     .padding(.bottom, 14)
             }
             ForEach(Tool.allCases) { t in
-                SidebarItem(tool: t, active: model.tool == t, badge: badge(for: t), compact: true) {
-                    withAnimation(.easeOut(duration: 0.15)) { model.tool = t }
+                SidebarItem(tool: t, active: model.tool == t, badge: badge(for: t), compact: true, ns: selection) {
+                    withAnimation(Motion.snappy) { model.tool = t }
                 }
             }
             Spacer()
@@ -103,7 +108,7 @@ struct Sidebar: View {
 
     var foldButton: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.2)) { collapsed.toggle() }
+            withAnimation(Motion.smooth) { collapsed.toggle() }
         } label: {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 14, weight: .semibold))
@@ -152,18 +157,17 @@ struct Sidebar: View {
             .frame(height: 150)
             .clipped()
 
-            Text("VÆRKTØJER")
-                .font(.system(size: 9, weight: .bold))
-                .tracking(2)
-                .foregroundColor(.mist.opacity(0.35))
+            Text("Værktøjer")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.mist.opacity(0.5))
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
                 .padding(.bottom, 6)
 
             VStack(spacing: 3) {
                 ForEach(Tool.allCases) { t in
-                    SidebarItem(tool: t, active: model.tool == t, badge: badge(for: t)) {
-                        withAnimation(.easeOut(duration: 0.15)) { model.tool = t }
+                    SidebarItem(tool: t, active: model.tool == t, badge: badge(for: t), ns: selection) {
+                        withAnimation(Motion.snappy) { model.tool = t }
                     }
                 }
             }
@@ -203,18 +207,42 @@ struct SidebarItem: View {
     let active: Bool
     let badge: String?
     var compact: Bool = false
+    let ns: Namespace.ID
     let action: () -> Void
     @State private var hover = false
+
+    init(tool: Tool, active: Bool, badge: String?, compact: Bool = false, ns: Namespace.ID, action: @escaping () -> Void) {
+        self.tool = tool
+        self.active = active
+        self.badge = badge
+        self.compact = compact
+        self.ns = ns
+        self.action = action
+    }
+
+    /// Den markering der glider mellem punkterne (Apple-agtig, neutral – ikonet bærer accenten).
+    @ViewBuilder
+    func marker(_ radius: CGFloat) -> some View {
+        if active {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color.white.opacity(0.09))
+                .matchedGeometryEffect(id: "sidebar-selection", in: ns)
+        } else {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color.white.opacity(hover ? 0.05 : 0))
+        }
+    }
 
     var body: some View {
         if compact {
             Button(action: action) {
                 Image(systemName: tool.icon)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(active ? AnyShapeStyle(Color.emberGradient) : AnyShapeStyle(Color.mist.opacity(0.6)))
+                    .foregroundStyle(active ? AnyShapeStyle(Color.ember) : AnyShapeStyle(Color.mist.opacity(0.6)))
+                    .symbolEffect(.bounce, value: active)
                     .frame(width: 44, height: 40)
-                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(active ? Color.ember.opacity(0.13) : Color.white.opacity(hover ? 0.05 : 0)))
+                    .background(marker(9))
+                    .animation(Motion.hover, value: hover)
                     .overlay(alignment: .topTrailing) {
                         if badge != nil { Circle().fill(Color.ember).frame(width: 7, height: 7).offset(x: -6, y: 6) }
                     }
@@ -234,7 +262,8 @@ struct SidebarItem: View {
                 Image(systemName: tool.icon)
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 20)
-                    .foregroundStyle(active ? AnyShapeStyle(Color.emberGradient) : AnyShapeStyle(Color.mist.opacity(0.6)))
+                    .foregroundStyle(active ? AnyShapeStyle(Color.ember) : AnyShapeStyle(Color.mist.opacity(0.6)))
+                    .symbolEffect(.bounce, value: active)
                 Text(tool.rawValue)
                     .font(.system(size: 13, weight: active ? .semibold : .medium))
                     .foregroundColor(active ? .mist : .mist.opacity(0.7))
@@ -242,6 +271,8 @@ struct SidebarItem: View {
                 if let badge {
                     Text(badge)
                         .font(.system(size: 10, weight: .bold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
                         .foregroundColor(.void)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -250,15 +281,8 @@ struct SidebarItem: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(active ? Color.ember.opacity(0.13) : Color.white.opacity(hover ? 0.05 : 0))
-            )
-            .overlay(alignment: .leading) {
-                if active {
-                    Capsule().fill(Color.emberGradient).frame(width: 3, height: 18).offset(x: -1)
-                }
-            }
+            .background(marker(9))
+            .animation(Motion.hover, value: hover)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

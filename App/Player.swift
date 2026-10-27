@@ -83,8 +83,12 @@ final class MeterBox: @unchecked Sendable {
 final class PlayerModel: ObservableObject {
     static let shared = PlayerModel()
 
-    @Published var track: LibTrack?
-    @Published var playing = false
+    @Published var track: LibTrack? {
+        didSet { if NowPlayingKey.shared.id != track?.id { NowPlayingKey.shared.id = track?.id } }
+    }
+    @Published var playing = false {
+        didSet { if NowPlayingKey.shared.playing != playing { NowPlayingKey.shared.playing = playing } }
+    }
     @Published var position: Double = 0
     @Published var duration: Double = 0
     @Published private(set) var bands: [UInt8] = []
@@ -712,7 +716,10 @@ enum EQRender {
 
 
 /// Tonearten der spiller lige nu – kun den, så tabellen ikke tegnes om 30 gange i sekundet.
+/// Det tabellerne lytter på (ændrer sig kun ved ny sang / afspil-pause – ikke 60 gange i sekundet).
 final class NowPlayingKey: ObservableObject {
     static let shared = NowPlayingKey()
     @Published var key: MusicalKey?
+    @Published var id: UUID?
+    @Published var playing = false
 }

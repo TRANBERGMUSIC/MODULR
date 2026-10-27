@@ -526,7 +526,7 @@ struct DialogHost: View {
                     .transition(.scale(scale: 0.94).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: dialogs.current?.id)
+        .animation(Motion.smooth, value: dialogs.current?.id)
     }
 
     @ViewBuilder
@@ -660,7 +660,7 @@ struct ModSegmented<T: Hashable>: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { selection = value }
+                        withAnimation(Motion.snappy) { selection = value }
                     }
             }
         }
