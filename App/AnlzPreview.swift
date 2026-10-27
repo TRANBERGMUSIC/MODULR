@@ -110,7 +110,7 @@ enum AnlzReader {
     }
 
     /// Den version USB-modulet skriver nu (usb/pioneer_usb.py: ANLZ_FORMAT).
-    static let currentFormat = 3
+    static let currentFormat = 6
 
     /// RGB-oversigten (PWV4 i .EXT) – ellers den blå (PWAV i .DAT).
     static func preview(root: URL, trackPath: String) -> Preview {
@@ -169,7 +169,7 @@ enum AnlzReader {
 }
 
 /// Oversigts-waveformen PRÆCIS som MODULR skriver den til CDJ'en (PWV4 i usb/pioneer_usb.py):
-/// 1200 søjler, hver 60 % gennemsnit + 40 % top af båndene, vægtet som rekordbox (WaveColor.rekordboxWeights),
+/// 1200 søjler, hver 60 % gennemsnit + 40 % top af båndene, vægtet som rekordbox' oversigt (WaveColor.overviewWeights),
 /// skaleret så 99 %-niveauet er 120 af 127. Bruges både i biblioteket og når USB'ens filer læses –
 /// så waveformen er den samme i MODULR, på USB'en og på CDJ'en.
 enum RekordboxPreview {
@@ -179,7 +179,7 @@ enum RekordboxPreview {
         let total = bands.count / 3
         guard total > 0 else { return [] }
         let n = columnCount
-        let w = WaveColor.rekordboxWeights
+        let w = WaveColor.overviewWeights
         var weighted = [(Double, Double, Double)](repeating: (0, 0, 0), count: n)
         for i in 0..<n {
             let a = i * total / n

@@ -256,6 +256,9 @@ enum WaveColor {
     /// og gælder MODULRs gemte bånd. SAMME formel bruges i USB-eksporten (usb/pioneer_usb.py: RB_WEIGHTS),
     /// så waveformen ser ens ud i MODULR, på CDJ'en og i rekordbox. `floor`/`boost` bruges ikke længere.
     static let rekordboxWeights = (lo: 1.0, mi: 1.5, hi: 2.6)
+    /// Oversigten (hele sangen) måler rå styrke pr. bånd, hvor rekordbox' diskant er svag (blå kun ~8 %).
+    /// Samme vægte som USB-eksportens PWV4 (usb/pioneer_usb.py: OV_WEIGHTS).
+    static let overviewWeights = (lo: 1.0, mi: 1.5, hi: 1.25)
 
     static func rgb(_ lo0: Double, _ mi0: Double, _ hi0: Double, floor f: Double = WaveColor.floor,
                     boost: Bool = false) -> (r: Double, g: Double, b: Double)? {

@@ -22,6 +22,7 @@ Brug (JSON ind/ud):
 
 import datetime
 import json
+import math
 import os
 import shutil
 import re
@@ -797,6 +798,10 @@ def _ref(values, q=0.99):
 # Vægtene gælder MODULRs gemte bånd (allerede normaliseret pr. bånd) og er de SAMME som i appen
 # (Core/LibraryModel.swift: WaveColor.rekordboxWeights) – så MODULR, CDJ og rekordbox viser samme farver.
 RB_WEIGHTS = (1.0, 1.5, 2.6)
+# Oversigten (PWV4) måler rå styrke pr. bånd – ikke farveforhold – og rekordbox' har en svag diskant:
+# rød dominerer ~56 %, grøn ~37 %, blå ~8 %; snit-styrke R:G:B ≈ 53:42:26 (målt på 49 rekordbox-analyser,
+# farvebytes bekræftet mod foto af CDJ-3000). Samme vægte i appen: WaveColor.overviewWeights.
+OV_WEIGHTS = (1.0, 1.5, 1.25)
 
 
 def _weighted(lo, mi, hi):
@@ -835,7 +840,8 @@ def waveforms_from_bands(bands):
     detail = []
     color_detail = []
     for lo, mi, hi in bands:
-        h = min(31, int(round(max(lo, mi, hi) / ref * 30)))
+        # højde skaleret så snittet rammer rekordbox' (≈10,3 af 31)
+        h = min(31, int(round(max(lo, mi, hi) / ref * 36.3)))
         r, g, b = _rgb7(lo, mi, hi, refs)
         detail.append(h | (b << 5))                    # blå visning: højde + hvidhed (diskant)
         color_detail.append((r << 13) | (g << 10) | (b << 7) | (h << 2))
@@ -844,15 +850,27 @@ def waveforms_from_bands(bands):
     pwav = []
     for lo, mi, hi in prev:
         h = min(25, int(round(max(lo, mi, hi) / pref * 24)))
-        pwav.append(h | (_rgb7(lo, mi, hi, refs)[2] << 5))
-    tiny = [min(15, int(round(max(c) / pref * 14))) for c in _smooth_cols(bands, 100)]
+        # "hvidhed" (diskant) – rekordbox' snit er ≈3,7 af 7
+        pwav.append(h | (int(round(_rgb7(lo, mi, hi, refs)[2] * 0.59)) << 5))
+    tiny = [min(15, int(round(max(c) / pref * 15.7))) for c in _smooth_cols(bands, 100)]
     cols = _smooth_cols(bands, 1200)
-    cref = _ref([max(_weighted(*c)) for c in cols])
+    def ov(c):
+        return (c[0] * OV_WEIGHTS[0], c[1] * OV_WEIGHTS[1], c[2] * OV_WEIGHTS[2])
+    cref = _ref([max(ov(c)) for c in cols])
     cprev = []
-    for lo, mi, hi in cols:
-        sl, sm, sh = (min(127, int(round(x / cref * 120))) for x in _weighted(lo, mi, hi))
-        top = max(sl, sm, sh)
-        cprev += [top, min(255, top * 2), max(sl, sm), sl, sm, sh]
+    for c in cols:
+        sl, sm, sh = (min(127, int(round(x / cref * 120))) for x in ov(c))
+        # byte 0–2 som rekordbox (Deep Symmetry: "hvidhed" og energi under ~10 kHz), fundet ved regression på
+        # 49 rekordbox-analyser: byte0 ≈ 9,75·√(sum) − 6,9 (R² 0,78) · byte0 + byte1 ≈ 256 (median præcis 256)
+        # · byte2 ≈ 0,82·lav + 0,46·mellem + 0,21·høj (R² 0,89). Digital stilhed = seks nuller.
+        total = sl + sm + sh
+        if total == 0:
+            cprev += [0, 0, 0, 0, 0, 0]
+            continue
+        b0 = max(0, min(127, int(round(9.75 * math.sqrt(total) - 6.9))))
+        b1 = max(0, min(255, 256 - b0))
+        b2 = max(0, min(127, int(round(0.82 * sl + 0.46 * sm + 0.21 * sh))))
+        cprev += [b0, b1, b2, sl, sm, sh]
     return pwav, tiny, detail, cprev, color_detail
 
 
@@ -864,20 +882,21 @@ def three_band(bands):
     refs = [_ref([c[k] for c in bands], 0.995) for k in range(3)]
     detail = []
     for lo, mi, hi in bands:
-        detail += [min(127, int(mi / refs[1] * 115)), min(127, int(hi / refs[2] * 115)), min(127, int(lo / refs[0] * 115))]
+        # rekordbox' 3-bånds-detalje: snit mellem ≈38, høj ≈34, lav ≈17 (bassen tegnes svagere)
+        detail += [min(127, int(mi / refs[1] * 177)), min(127, int(hi / refs[2] * 175)), min(127, int(lo / refs[0] * 70))]
     cols = _smooth_cols(bands, 1200)
     prefs = [_ref([c[k] for c in cols]) for k in range(3)]
     prev = []
     for lo, mi, hi in cols:
-        prev += [min(63, int(mi / prefs[1] * 42)), min(63, int(hi / prefs[2] * 42)), min(63, int(lo / prefs[0] * 42))]
+        prev += [min(63, int(mi / prefs[1] * 43)), min(63, int(hi / prefs[2] * 42.5)), min(63, int(lo / prefs[0] * 48))]
     return prev, detail
 
 
 
 MODULR_MARK = ".modulr"
 # Tælles op hver gang MODULRs analysefiler ændrer udseende/indhold (så appen kan se forældede sange på stikket).
-# 3 = rekordbox-farver (RB_WEIGHTS), hot cues A–C kun i PCO2, phrases.
-ANLZ_FORMAT = 3
+# 3 = rekordbox-farver (RB_WEIGHTS), hot cues A–C kun i PCO2, phrases. 4 = oversigt med egne vægte (OV_WEIGHTS). 5 = oversigtens byte 0–2 som rekordbox. 6 = højder/hvidhed/3-bånd kalibreret mod rekordbox.
+ANLZ_FORMAT = 6
 
 
 def anlz_folder_number(analyze_path):

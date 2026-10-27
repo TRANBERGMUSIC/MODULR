@@ -98,6 +98,27 @@ hardware-testede projekter skriver den – derfor udeladt.
 
 **PQTZ** rundes nu ned til hele ms som rekordbox.
 
+## Kalibrering mod rekordbox (49 analyser fra KNOWN MUSIC + foto af CDJ-3000)
+
+**Hot cues:** PCOB (gammel liste) indeholder ALDRIG A–C – kun D–H (også i filer CDJ'en selv har skrevet).
+A–C står kun i PCO2. Farver: kode 0 + præcis RGB. Standard A–H: FF0017, 00C4FF, 33FF00, 4D00FF, 00FF30, FF5E00, 0000FF, FFE800.
+
+**PWV5 (RGB-detalje):** bits 15–13 = rød (bas), 12–10 = grøn (mellem), 9–7 = blå (diskant) – bekræftet ved korrelation
+med PWV4 (0,86 / 0,61 / 0,62). rekordbox: dominans R 53 %, G 15 %, B 32 %; højde-snit 10,3.
+Vægte på MODULRs bånd: 1 / 1,5 / 2,6 (`RB_WEIGHTS` = `WaveColor.rekordboxWeights`).
+
+**PWV4 (RGB-oversigt):** byte 3/4/5 = R/G/B (bekræftet mod foto). Rå styrke, svag diskant: dominans 55/37/8 %,
+snit 53/41/26. Vægte 1 / 1,5 / 1,25 (`OV_WEIGHTS` = `WaveColor.overviewWeights`).
+Byte 0–2 (Deep Symmetry: "hvidhed" og energi under ~10 kHz), fundet ved regression:
+byte0 ≈ 9,75·√(b3+b4+b5) − 6,9 · byte0 + byte1 ≈ 256 · byte2 ≈ 0,82·b3 + 0,46·b4 + 0,21·b5. Digital stilhed = seks nuller.
+MODULR skrev før byte1 = 2·højde (steg med lyden) → CDJ'en tegnede oversigten hvid/lyseblå.
+
+**Øvrige snit (rekordbox → MODULR nu):** PWAV højde 15,7 / hvidhed 3,7 · PWV2 10,9 · PWV3 10,3 ·
+PWV6 mid/høj/lav 24,6/23,9/23,1 · PWV7 38,4/34,5/17,3 (bassen svagest; Deep Symmetry: ikke-lineær skala).
+PWVC (3 × u16) varierer pr. sang – betydning ukendt, MODULR skriver en fast værdi.
+
+**Formatversion:** MODULR skriver `format=N` i `.modulr`; USB-listen markerer ældre som FORÆLDET → højreklik "Opdatér fra MODULR".
+
 ## Ikke lavet endnu
 
 - PQT2 (se ovenfor).
