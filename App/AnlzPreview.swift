@@ -113,6 +113,56 @@ enum AnlzReader {
     }
 }
 
+/// Oversigts-waveformen PRÆCIS som MODULR skriver den til CDJ'en (PWV4 i usb/pioneer_usb.py):
+/// 1200 søjler, hver 60 % gennemsnit + 40 % top af båndene, vægtet som rekordbox (WaveColor.rekordboxWeights),
+/// skaleret så 99 %-niveauet er 120 af 127. Bruges både i biblioteket og når USB'ens filer læses –
+/// så waveformen er den samme i MODULR, på USB'en og på CDJ'en.
+enum RekordboxPreview {
+    static let columnCount = 1200
+
+    static func columns(bands: [UInt8]) -> [(h: Double, r: Double, g: Double, b: Double)] {
+        let total = bands.count / 3
+        guard total > 0 else { return [] }
+        let n = columnCount
+        let w = WaveColor.rekordboxWeights
+        var weighted = [(Double, Double, Double)](repeating: (0, 0, 0), count: n)
+        for i in 0..<n {
+            let a = i * total / n
+            let b = max(a + 1, (i + 1) * total / n)
+            var sum = [0.0, 0.0, 0.0], mx = [0.0, 0.0, 0.0]
+            var k = 0
+            if a < total {
+                for c in a..<min(b, total) {
+                    for j in 0..<3 {
+                        let v = Double(bands[c * 3 + j])
+                        sum[j] += v
+                        if v > mx[j] { mx[j] = v }
+                    }
+                    k += 1
+                }
+            }
+            let cnt = Double(max(1, k))
+            let lo = 0.6 * sum[0] / cnt + 0.4 * mx[0]
+            let mi = 0.6 * sum[1] / cnt + 0.4 * mx[1]
+            let hi = 0.6 * sum[2] / cnt + 0.4 * mx[2]
+            weighted[i] = (lo * w.lo, mi * w.mi, hi * w.hi)
+        }
+        let tops = weighted.map { max($0.0, max($0.1, $0.2)) }.sorted()
+        let ref = max(1, tops[min(n - 1, Int(Double(n) * 0.99))])
+        return weighted.map { v in
+            let s = [v.0, v.1, v.2].map { min(127, ($0 / ref * 120).rounded()) }
+            let top = max(s[0], max(s[1], s[2]))
+            return top > 0 ? (top / 127, s[0] / top, s[1] / top, s[2] / top) : (0, 0, 0, 0)
+        }
+    }
+
+    static func image(bands: [UInt8], width: Int, height: Int) -> CGImage? {
+        let cols = columns(bands: bands)
+        guard !cols.isEmpty else { return nil }
+        return AnlzReader.image(AnlzReader.Preview(kind: .rgb, path: "", columns: cols), width: width, height: height)
+    }
+}
+
 /// Cache: én læsning pr. sang (genlæses når filen ændres).
 final class UsbWaveCache {
     static let shared = UsbWaveCache()
