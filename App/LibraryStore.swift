@@ -1033,12 +1033,14 @@ final class LibraryStore: ObservableObject {
         for (i, letter) in HotCue.letters.enumerated() {
             guard let sec = t.hotCues?[letter] else { continue }
             let c = HotCue.rgb[letter] ?? (1, 1, 1)
-            hot.append(["slot": i + 1, "ms": sec * 1000, "rgb": [Int(c.0 * 255), Int(c.1 * 255), Int(c.2 * 255)]])
+            hot.append(["slot": i + 1, "ms": sec * 1000, "rgb": [Int((c.0 * 255).rounded()), Int((c.1 * 255).rounded()), Int((c.2 * 255).rounded())]])
         }
         analysis["hot_cues"] = hot
         var memory = (t.cues ?? []).map { $0 * 1000 }
         // Den orange cue på første slag (så CDJ'en står klar på første beat, ligesom i MODULR)
-        let cueMs = PlayerModel.autoCue(for: t, peaks: peaks(t)) * 1000
+        let pk = peaks(t)
+        // Uden data om hvor lyden starter: første slag i griddet (ikke 0:00)
+        let cueMs = pk.isEmpty ? (t.firstBeatMs ?? 0) : PlayerModel.autoCue(for: t, peaks: pk) * 1000
         if (t.bpm ?? 0) > 0, !memory.contains(where: { abs($0 - cueMs) < 5 }) { memory.append(cueMs) }
         analysis["memory_cues"] = memory.sorted()
         // Sangens opbygning → phrases på CDJ-3000 (intro/up/down/chorus/outro som rekordbox)

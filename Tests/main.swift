@@ -662,11 +662,13 @@ do {
     check("Før-billede markerer klip", env.clips.filter { $0 }.count > 100 && env.peaks.count == 600)
     check("Overblik kan gemmes og læses", LoudnessEnvelope(data: env.data) == env)
 
-    // Waveform-farver: fuldt mix = laks, kun bas = rød, kun mellem = grøn
-    if let c = WaveColor.rgb(255, 128, 102) {
-        check("Fuldt mix bliver laksefarvet", abs(c.r - 1) < 1e-9 && c.g > 0.6 && c.g < 0.75 && c.b < c.g, "\(c)")
+    // Waveform-farver som rekordbox: kun bas = rød, kun mellem = grøn, kun diskant = blå, fuldt mix = lys
+    if let c = WaveColor.rgb(255, 0, 0) { check("Bas alene er rød", c.r == 1 && c.g == 0 && c.b == 0) }
+    if let c = WaveColor.rgb(0, 255, 0) { check("Mellem alene er grøn", c.g == 1 && c.r == 0 && c.b == 0) }
+    if let c = WaveColor.rgb(0, 0, 255) { check("Diskant alene er blå", c.b == 1 && c.r == 0 && c.g == 0) }
+    if let c = WaveColor.rgb(255, 196, 120) {
+        check("Fuldt mix bliver lyst (alle kanaler høje)", min(c.r, min(c.g, c.b)) > 0.75, "\(c)")
     }
-    if let c = WaveColor.rgb(0, 255, 0) { check("Mellem alene er grøn", abs(c.g - 1) < 1e-9 && c.r < 0.4) }
     check("Stilhed giver ingen farve", WaveColor.rgb(0, 0, 0) == nil)
 
     // Død luft: 30 s musik + 6 min stilhed → klippes ved musikkens slutning

@@ -251,15 +251,20 @@ enum WaveColor {
     static let floor = 0.35
 
     /// `floor` 0,35 = pastel (overblik og tabel), ca. 0,08 = mættet som rekordbox' detaljevisning.
+    /// rekordbox' RGB-farver: rød = bas, grøn = mellem (vokal/synth), blå = diskant – rene forhold uden grundtone.
+    /// Vægtene er kalibreret mod 50 rigtige rekordbox-analyser (bas dominerer ~53 %, diskant ~32 %, mellem ~15 %)
+    /// og gælder MODULRs gemte bånd. SAMME formel bruges i USB-eksporten (usb/pioneer_usb.py: RB_WEIGHTS),
+    /// så waveformen ser ens ud i MODULR, på CDJ'en og i rekordbox. `floor`/`boost` bruges ikke længere.
+    static let rekordboxWeights = (lo: 1.0, mi: 1.5, hi: 2.6)
+
     static func rgb(_ lo0: Double, _ mi0: Double, _ hi0: Double, floor f: Double = WaveColor.floor,
                     boost: Bool = false) -> (r: Double, g: Double, b: Double)? {
-        // boost: mellem og diskant fremhæves (som rekordbox' detaljevisning: hi-hats blå, vokal/synth grøn)
-        let lo = lo0
-        let mi = boost ? mi0 * 1.6 : mi0
-        let hi = boost ? hi0 * 2.0 : hi0
+        let lo = lo0 * rekordboxWeights.lo
+        let mi = mi0 * rekordboxWeights.mi
+        let hi = hi0 * rekordboxWeights.hi
         let top = max(lo, max(mi, hi))
         guard top > 0 else { return nil }
-        return (f + (1 - f) * lo / top, f + (1 - f) * mi / top, f + (1 - f) * hi / top)
+        return (lo / top, mi / top, hi / top)
     }
 
     /// Værdien (0–255) af et bånd ved en brøkdel af en kolonne, lineært interpoleret – så en zoomet
@@ -299,9 +304,10 @@ enum WaveColor {
 /// Hot cues A–H med rekordbox' farver.
 enum HotCue {
     static let letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    /// rekordbox' standardfarver (aflæst fra rigtige rekordbox-analyser) – samme som på CDJ'en.
     static let rgb: [String: (Double, Double, Double)] = [
-        "A": (0.91, 0.16, 0.36), "B": (0.24, 0.55, 0.95), "C": (0.33, 0.78, 0.33), "D": (0.62, 0.36, 0.94),
-        "E": (0.24, 0.80, 0.50), "F": (0.94, 0.48, 0.17), "G": (0.18, 0.33, 0.94), "H": (0.80, 0.72, 0.20),
+        "A": (1.0, 0.0, 23 / 255), "B": (0.0, 196 / 255, 1.0), "C": (51 / 255, 1.0, 0.0), "D": (77 / 255, 0.0, 1.0),
+        "E": (0.0, 1.0, 48 / 255), "F": (1.0, 94 / 255, 0.0), "G": (0.0, 0.0, 1.0), "H": (1.0, 232 / 255, 0.0),
     ]
 }
 

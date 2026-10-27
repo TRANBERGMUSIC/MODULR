@@ -637,6 +637,11 @@ HOTCUE_PALETTE = {
 }
 
 
+# rekordbox' standardfarver for hot cue A–H (aflæst fra 50 rekordbox-analyser)
+REKORDBOX_HOTCUE_RGB = {1: (0xFF, 0x00, 0x17), 2: (0x00, 0xC4, 0xFF), 3: (0x33, 0xFF, 0x00), 4: (0x4D, 0x00, 0xFF),
+                        5: (0x00, 0xFF, 0x30), 6: (0xFF, 0x5E, 0x00), 7: (0x00, 0x00, 0xFF), 8: (0xFF, 0xE8, 0x00)}
+
+
 def nearest_hotcue_color(rgb):
     """Nærmeste farve i rekordbox' palette (så CDJ'ens pads lyser i samme farve som i MODULR)."""
     if not rgb:
@@ -653,8 +658,9 @@ def _cue_list(cues, hot):
 
 
 def _pcob(kind, cues=()):
-    """Cue-liste i det gamle format (alle CDJ'er): PCPT-poster á 0x38 bytes."""
-    cues = _cue_list([c for c in cues if (c[0] > 0) == (kind == 1)], kind == 1)
+    """Cue-liste i det gamle format: PCPT-poster á 0x38 bytes.
+    rekordbox (og CDJ'en selv) lægger ALDRIG hot cue A–C her – kun D–H; A–C står kun i PCO2."""
+    cues = _cue_list([c for c in cues if (c[0] > 0) == (kind == 1) and not (1 <= c[0] <= 3)], kind == 1)
     n = len(cues)
     body = b""
     for slot, ms, *_rest in cues:
@@ -678,8 +684,9 @@ def _pco2(kind, cues=()):
         e += struct.pack(">B7sHH", 0, b"\x01" + b"\x00" * 6, 0, 0)
         e += struct.pack(">I", 0)                      # ingen kommentar
         if slot > 0:
-            code, (r, g, b) = nearest_hotcue_color(rgb)
-            e += struct.pack(">BBBB", code, r, g, b)
+            # rekordbox skriver farvekode 0 og den præcise RGB (standardfarverne A–H)
+            r, g, b = rgb if rgb else REKORDBOX_HOTCUE_RGB.get(slot, (0, 255, 0))
+            e += struct.pack(">BBBB", 0, r, g, b)
         else:
             e += b"\x00\x00\x00\x00"
         e += b"\x00" * (0x58 - len(e))
@@ -786,15 +793,23 @@ def _ref(values, q=0.99):
     return max(1, v[min(len(v) - 1, int(len(v) * q))]) if v else 1
 
 
-def _rgb7(lo, mi, hi):
-    """Samme farver som MODULRs egen RGB-waveform (rekordbox-stil): bas rød, mellem grøn, diskant blå.
-    Returnerer 0–7 pr. kanal (lyse, normaliserede farver – som rekordbox gemmer dem)."""
-    mi, hi = mi * 1.6, hi * 2.0
-    top = max(lo, mi, hi)
+# Kalibreret mod 50 rekordbox-analyser fra en rigtig USB (bas dominerer ~53 %, diskant ~32 %, mellem ~15 %).
+# Vægtene gælder MODULRs gemte bånd (allerede normaliseret pr. bånd) og er de SAMME som i appen
+# (Core/LibraryModel.swift: WaveColor.rekordboxWeights) – så MODULR, CDJ og rekordbox viser samme farver.
+RB_WEIGHTS = (1.0, 1.5, 2.6)
+
+
+def _weighted(lo, mi, hi):
+    return (lo * RB_WEIGHTS[0], mi * RB_WEIGHTS[1], hi * RB_WEIGHTS[2])
+
+
+def _rgb7(lo, mi, hi, refs=None):
+    """RGB (0–7 pr. kanal) som rekordbox: rød = bas, grøn = mellem (vokal/synth), blå = diskant."""
+    v = _weighted(lo, mi, hi)
+    top = max(v)
     if top <= 0:
         return 7, 7, 7
-    f = 0.1
-    return tuple(int(round(7 * (f + (1 - f) * x / top))) for x in (lo, mi, hi))
+    return tuple(int(round(7 * x / top)) for x in v)
 
 
 def _smooth_cols(bands, n):
@@ -816,11 +831,12 @@ def waveforms_from_bands(bands):
     if not bands:
         bands = [(0, 0, 0)]
     ref = _ref([max(c) for c in bands], 0.995)
+    refs = None
     detail = []
     color_detail = []
     for lo, mi, hi in bands:
         h = min(31, int(round(max(lo, mi, hi) / ref * 30)))
-        r, g, b = _rgb7(lo, mi, hi)
+        r, g, b = _rgb7(lo, mi, hi, refs)
         detail.append(h | (b << 5))                    # blå visning: højde + hvidhed (diskant)
         color_detail.append((r << 13) | (g << 10) | (b << 7) | (h << 2))
     prev = _smooth_cols(bands, 400)
@@ -828,13 +844,13 @@ def waveforms_from_bands(bands):
     pwav = []
     for lo, mi, hi in prev:
         h = min(25, int(round(max(lo, mi, hi) / pref * 24)))
-        pwav.append(h | (_rgb7(lo, mi, hi)[2] << 5))
+        pwav.append(h | (_rgb7(lo, mi, hi, refs)[2] << 5))
     tiny = [min(15, int(round(max(c) / pref * 14))) for c in _smooth_cols(bands, 100)]
     cols = _smooth_cols(bands, 1200)
-    cref = _ref([max(c) for c in cols])
+    cref = _ref([max(_weighted(*c)) for c in cols])
     cprev = []
     for lo, mi, hi in cols:
-        sl, sm, sh = (min(127, int(round(x / cref * 120))) for x in (lo, mi, hi))
+        sl, sm, sh = (min(127, int(round(x / cref * 120))) for x in _weighted(lo, mi, hi))
         top = max(sl, sm, sh)
         cprev += [top, min(255, top * 2), max(sl, sm), sl, sm, sh]
     return pwav, tiny, detail, cprev, color_detail
