@@ -7,14 +7,17 @@
 	<key>CFBundleIdentifier</key><string>dk.tranbergmusic.modulr</string>
 	<key>CFBundleExecutable</key><string>MODULR</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleVersion</key><string>60</string>
-	<key>CFBundleShortVersionString</key><string>1.22.0</string>
+	<key>CFBundleVersion</key><string>61</string>
+	<key>CFBundleShortVersionString</key><string>1.22.1</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.music</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>NSRemovableVolumesUsageDescription</key><string>MODULR skriver dine playlister og sange til USB-stikket, så de kan spilles på CDJ'en.</string>
-	<key>NSDownloadsFolderUsageDescription</key><string>MODULR fanger filer, du henter fra download-gates i din browser.</string>
+	<key>NSDownloadsFolderUsageDescription</key><string>MODULR læser de sange, du trækker ind fra Overførsler, og fanger filer, du henter fra download-gates i din browser.</string>
+	<key>NSDesktopFolderUsageDescription</key><string>MODULR læser de sange, du trækker ind fra skrivebordet, så de kan analyseres og spilles.</string>
+	<key>NSDocumentsFolderUsageDescription</key><string>MODULR læser de sange, du trækker ind fra Dokumenter, så de kan analyseres og spilles.</string>
+	<key>NSNetworkVolumesUsageDescription</key><string>MODULR læser de sange, du trækker ind fra et netværksdrev.</string>
 </dict>
 </plist>

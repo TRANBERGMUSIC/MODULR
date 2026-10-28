@@ -65,7 +65,10 @@ if [ ! -x "$FPCALC_CACHE" ]; then
 fi
 cp "$FPCALC_CACHE" "$OUT/$APP/Contents/Resources/fpcalc"
 
-codesign --force --deep -s - "$OUT/$APP" >/dev/null 2>&1 || true
+# Fast "designated requirement" (bundle-id i stedet for filens hash): så husker macOS din tilladelse til
+# skrivebord/Overførsler/USB efter hver ny build, i stedet for at nægte eller spørge igen.
+codesign --force --deep -s - -r '=designated => identifier "dk.tranbergmusic.modulr"' "$OUT/$APP" >/dev/null 2>&1 \
+  || codesign --force --deep -s - "$OUT/$APP" >/dev/null 2>&1 || true
 
 if [ "$MODE" = "build" ]; then exit 0; fi
 

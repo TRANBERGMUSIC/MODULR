@@ -29,6 +29,7 @@ struct RootView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var findBetter: FindBetterModel
     @AppStorage("ui.sidebarCollapsed") private var collapsed = false
+    @State private var appDropTargeted = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -57,6 +58,16 @@ struct RootView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                if appDropTargeted {
+                    DropHint(text: "Slip for at lægge sangene i biblioteket og analysere dem").padding(16)
+                }
+            }
+            .animation(Motion.hover, value: appDropTargeted)
+            // Overalt i appen: træk sange eller mapper ind fra Finder, skrivebordet, Downloads, eksterne drev …
+            // (de steder der selv tager imod filer – biblioteket, Artwork, Bitrate-tjek – vinder, fordi de ligger inderst)
+            .fileDrop(targeted: $appDropTargeted) { urls in
+                LibraryStore.shared.importDropped(urls)
+                withAnimation(Motion.snappy) { model.tool = .library }
             }
         }
         .background(Color.void)
