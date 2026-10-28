@@ -721,6 +721,10 @@ final class Updater: ObservableObject {
         p.waitUntilExit()
         let output = String(data: data, encoding: .utf8) ?? ""
         guard p.terminationStatus == 0 else {
+            // Hele loggen gemmes, så alle fejl kan ses (ikke kun den første)
+            let logURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/MODULR/update-build.log")
+            try? output.write(to: logURL, atomically: true, encoding: .utf8)
             let errors = output.split(separator: "\n").filter { $0.contains("error:") }
             if let first = errors.first {
                 // fx ".../App/LibraryView.swift:412:17: error: ..." → "LibraryView.swift:412: ..."

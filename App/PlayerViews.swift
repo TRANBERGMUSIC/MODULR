@@ -702,8 +702,12 @@ struct SectionStrip: View {
         .modMenu(title: "\(s.kind.title) · takt \(s.startBar + 1)–\(s.endBar)",
                  subtitle: own ? "Dine egne sektioner" : "Appens forslag – ret det, så bliver det dit") { menu(i, secs: secs) }
         .offset(x: x0)
-        .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar). Klik for at hoppe dertil · træk i kanterne for at flytte · højreklik for at skifte type, dele eller slå sammen."
-              + (own ? "" : "\nAppens forslag – indtil du retter det."))
+        .help(helpText(s, own: own))
+    }
+
+    func helpText(_ s: SongSection, own: Bool) -> String {
+        let base: String = "\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar). Klik for at hoppe dertil · træk i kanterne for at flytte · højreklik for at skifte type, dele eller slå sammen."
+        return own ? base : base + "\nAppens forslag – indtil du retter det."
     }
 
     func handle(_ i: Int, secs: [SongSection], w: CGFloat, dur: Double) -> some View {

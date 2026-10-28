@@ -151,16 +151,21 @@ struct LowEndMetrics: Codable, Equatable {
         var subPk = 0.0, kickPk = 0.0
         var kickPeaks = [Double]()
         for i in 0..<d.count {
-            let g = gains?(i) ?? (lo: 1.0, mi: 1.0, hi: 1.0)
-            let sub = Double(d.subRMS[i]) * g.lo, low = Double(d.lowRMS[i]) * g.lo
-            let mid = Double(d.midRMS[i]) * g.mi, high = Double(d.highRMS[i]) * g.hi
+            let g: (lo: Double, mi: Double, hi: Double) = gains?(i) ?? (lo: 1.0, mi: 1.0, hi: 1.0)
+            let sub: Double = Double(d.subRMS[i]) * g.lo
+            let low: Double = Double(d.lowRMS[i]) * g.lo
+            let mid: Double = Double(d.midRMS[i]) * g.mi
+            let high: Double = Double(d.highRMS[i]) * g.hi
             subPk = max(subPk, Double(d.subPeak[i]) * g.lo)
             kickPk = max(kickPk, Double(d.kickPeak[i]) * g.lo)
             guard loud.isEmpty || (i < loud.count && loud[i]) else { continue }
             eSub += sub * sub
             eLow += low * low
-            eFull += low * low + mid * mid + high * high
-            eSide += pow(Double(d.sideSubRMS[i]) * g.lo, 2)
+            let lowE: Double = low * low
+            let restE: Double = mid * mid + high * high
+            eFull += lowE + restE
+            let side: Double = Double(d.sideSubRMS[i]) * g.lo
+            eSide += side * side
             let k = Double(d.kickRMS[i]) * g.lo
             eKick += k * k
             kickPeaks.append(Double(d.kickPeak[i]) * g.lo)
@@ -346,7 +351,13 @@ struct LowEndPanel: View {
             }
             return m
         }
-        let full = (0..<d.count).map { d.lowRMS[$0] * d.lowRMS[$0] + d.midRMS[$0] * d.midRMS[$0] + d.highRMS[$0] * d.highRMS[$0] }
+        var full = [Float](repeating: 0, count: d.count)
+        for i in 0..<d.count {
+            let lo: Float = d.lowRMS[i] * d.lowRMS[i]
+            let mi: Float = d.midRMS[i] * d.midRMS[i]
+            let hi: Float = d.highRMS[i] * d.highRMS[i]
+            full[i] = lo + mi + hi
+        }
         let sorted = full.sorted()
         guard !sorted.isEmpty else { return [] }
         let cut = sorted[Int(Double(sorted.count) * 0.65)]
@@ -462,8 +473,9 @@ struct LowEndOverview: View {
             Canvas { ctx, size in
                 let W = Double(size.width), H = Double(size.height)
                 func y(_ v: Double) -> Double {
-                    let db = v > 1e-9 ? 20 * log10(v) : -120
-                    return H * (1 - max(0, min(1, (db - Self.floorDB) / -Self.floorDB)))
+                    let db: Double = v > 1e-9 ? 20 * log10(v) : -120
+                    let f: Double = (db - Self.floorDB) / -Self.floorDB
+                    return H * (1 - max(0, min(1, f)))
                 }
                 // Zoner: rød over −3 dBFS, linje ved −6
                 ctx.fill(Path(CGRect(x: 0, y: 0, width: W, height: y(0.708))), with: .color(Color.red.opacity(0.12)))
@@ -480,7 +492,7 @@ struct LowEndOverview: View {
                         let a = c * n / cols, b = max(a + 1, (c + 1) * n / cols)
                         var mx = 0.0
                         for i in a..<min(n, b) {
-                            let gl = gain ? (gains?(i).lo ?? 1) : 1
+                            let gl: Double = gain ? (gains?(i).lo ?? 1.0) : 1.0
                             mx = max(mx, Double(arr[i]) * gl)
                         }
                         p.addLine(to: CGPoint(x: Double(c), y: y(mx)))
@@ -570,8 +582,11 @@ struct KickShape: View {
                 guard a >= 0, a < n else { continue }
                 var lo: Float = 0, hi: Float = 0
                 for i in a..<min(n, b) { lo = min(lo, data.lowMin[i]); hi = max(hi, data.lowMax[i]) }
-                let g = gain ? (gains?(Int(ta * LowEndData.rate)).lo ?? 1) : 1
-                let y0 = mid - Double(hi) * g * (H / 2 - 4), y1 = mid - Double(lo) * g * (H / 2 - 4)
+                let gi: Int = Int(ta * LowEndData.rate)
+                let g: Double = gain ? (gains?(gi).lo ?? 1.0) : 1.0
+                let scale: Double = g * (H / 2 - 4)
+                let y0: Double = mid - Double(hi) * scale
+                let y1: Double = mid - Double(lo) * scale
                 p.addRect(CGRect(x: Double(c), y: y0, width: 1, height: max(0.5, y1 - y0)))
             }
             return p
