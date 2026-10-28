@@ -119,8 +119,10 @@ final class PlayerModel: ObservableObject {
     @Published var volume: Double = 0.85 { didSet { engine.mainMixerNode.outputVolume = Float(volume) } }
 
     private let engine = AVAudioEngine()
-    private let node = AVAudioPlayerNode()
-    private let eqUnit = AVAudioUnitEQ(numberOfBands: 3)
+    private var node = AVAudioPlayerNode()
+    private var eqUnit = AVAudioUnitEQ(numberOfBands: 3)
+    /// Formatet kæden sidst blev koblet med (samplerate + kanaler)
+    private var connectedFormat: (rate: Double, channels: AVAudioChannelCount)?
     private var file: AVAudioFile?
     private var sampleRate: Double = 44100
     private var startFrame: AVAudioFramePosition = 0
@@ -318,10 +320,28 @@ final class PlayerModel: ObservableObject {
             eqUnit.removeTap(onBus: 0)
             tapInstalled = false
         }
-        engine.disconnectNodeOutput(node)
-        engine.disconnectNodeOutput(eqUnit)
-        engine.connect(node, to: eqUnit, format: format)
+        // Ny samplerate eller nyt antal kanaler (fx 44,1 → 48 kHz): helt nye enheder i stedet for at koble om.
+        // At koble de gamle om kan få AVAudioEngine til at gå ned, fordi EQ'ens ind- og udgang kortvarigt
+        // har forskellig samplerate (det var crashet, når man skiftede mellem sange).
+        let same = connectedFormat.map { $0.rate == format.sampleRate && $0.channels == format.channelCount } ?? false
+        if !same {
+            engine.detach(node)
+            engine.detach(eqUnit)
+            node = AVAudioPlayerNode()
+            eqUnit = AVAudioUnitEQ(numberOfBands: 3)
+            engine.attach(node)
+            engine.attach(eqUnit)
+            EQSettings().configure(eqUnit)
+        } else {
+            engine.disconnectNodeOutput(node)
+            engine.disconnectNodeOutput(eqUnit)
+        }
+        // Bagfra: EQ → mixer først, så afspiller → EQ – så EQ'ens to ender aldrig er uenige om formatet
         engine.connect(eqUnit, to: engine.mainMixerNode, format: format)
+        engine.connect(node, to: eqUnit, format: format)
+        connectedFormat = (format.sampleRate, format.channelCount)
+        appliedEQ = nil            // tving EQ'en ud på den (evt. nye) enhed
+        applyActiveEQ()
         let box = meter
         eqUnit.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
             guard let d = buf.floatChannelData else { return }
