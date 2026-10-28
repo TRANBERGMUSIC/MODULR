@@ -390,9 +390,16 @@ final class PlayerModel: ObservableObject {
     func play() {
         guard let f = file else { return }
         if startFrame >= f.length { startFrame = 0 }
+        // Værn: er afspilleren af en eller anden grund ikke koblet til, kobles den igen (ellers kaster play() en fejl,
+        // som macOS sluger – og så reagerer vinduet ikke på klik)
+        if engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty {
+            connectedFormat = nil
+            connect(format: f.processingFormat)
+        }
         if !engine.isRunning {
             do { try engine.start() } catch { return }
         }
+        guard !engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty else { return }
         schedule(from: startFrame)
         node.play()
         playing = true
@@ -635,6 +642,7 @@ final class PlayerModel: ObservableObject {
             if !engine.isRunning {
                 do { try engine.start() } catch { playing = false; return }
             }
+            guard !engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty else { playing = false; return }
             schedule(from: startFrame)
             node.play()
         }

@@ -1,79 +1,86 @@
-// MODULR – EQ som en isolator på en DJ-mixer: lyden deles i tre bånd med stejle filtre (24 dB/oktav,
-// Linkwitz-Riley), og hvert bånd har sin egen volumen. Helt nede = båndet er væk (kill) – næsten som stems:
-// bas/kick, mellemtone (vokal, synth) og diskant (hihats) kan fjernes hver for sig.
-// Står alle tre på 0 dB, går lyden helt uden om filtrene (urørt).
+// MODULR – EQ der kan dræbe et bånd næsten helt (som stems / en isolator på en DJ-mixer):
+// bas og kick under 220 Hz, vokal/synth 220 Hz–3 kHz, hihats og luft over 3 kHz.
+// Én AVAudioUnitEQ i serie (afspiller → EQ → mixer) – samme simple kobling som før, så lyden aldrig
+// står "afkoblet". Normalt arbejder knapperne med shelf/klokke; helt i bund slås stejle filtre til
+// (24 dB/oktav), så båndet forsvinder. Står alt på 0 dB, er alle bånd neutrale (urørt lyd).
 
 import AVFoundation
 
 final class IsolatorEQ {
-    /// Delefrekvenser: under 220 Hz = bas og kick, 220 Hz–3 kHz = vokal/synth, over 3 kHz = hihats og luft.
     static let lowCross: Float = 220
     static let highCross: Float = 3000
 
-    let lowF = AVAudioUnitEQ(numberOfBands: 2)    // lavpas × 2
-    let midF = AVAudioUnitEQ(numberOfBands: 4)    // højpas × 2 + lavpas × 2
-    let highF = AVAudioUnitEQ(numberOfBands: 2)   // højpas × 2
-    let lowV = AVAudioMixerNode()
-    let midV = AVAudioMixerNode()
-    let highV = AVAudioMixerNode()
-    let dryV = AVAudioMixerNode()                 // urørt lyd (bruges når EQ'en står flad)
-    let sum = AVAudioMixerNode()
+    // Bånd i EQ-enheden
+    private enum B {
+        static let lowCut1 = 0, lowCut2 = 1      // højpas 220 Hz ×2 (kun ved kill)
+        static let lowShelf = 2
+        static let mid1 = 3, mid2 = 4            // to brede klokker der dækker 220 Hz–3 kHz
+        static let highShelf = 5
+        static let highCut1 = 6, highCut2 = 7    // lavpas 3 kHz ×2 (kun ved kill)
+        static let count = 8
+    }
 
-    var nodes: [AVAudioNode] { [lowF, midF, highF, lowV, midV, highV, dryV, sum] }
-    var output: AVAudioNode { sum }
+    let unit = AVAudioUnitEQ(numberOfBands: B.count)
+    var output: AVAudioNode { unit }
+    var nodes: [AVAudioNode] { [unit] }
 
     init() {
-        Self.setup(lowF, [(.lowPass, Self.lowCross), (.lowPass, Self.lowCross)])
-        Self.setup(midF, [(.highPass, Self.lowCross), (.highPass, Self.lowCross),
-                          (.lowPass, Self.highCross), (.lowPass, Self.highCross)])
-        Self.setup(highF, [(.highPass, Self.highCross), (.highPass, Self.highCross)])
+        let b = unit.bands
+        func set(_ i: Int, _ type: AVAudioUnitEQFilterType, _ f: Float, bw: Float = 1) {
+            b[i].filterType = type
+            b[i].frequency = f
+            b[i].bandwidth = bw
+            b[i].gain = 0
+            b[i].bypass = false
+        }
+        set(B.lowCut1, .highPass, Self.lowCross)
+        set(B.lowCut2, .highPass, Self.lowCross)
+        set(B.lowShelf, .lowShelf, Self.lowCross)
+        set(B.mid1, .parametric, 520, bw: 1.7)
+        set(B.mid2, .parametric, 1350, bw: 1.7)
+        set(B.highShelf, .highShelf, Self.highCross)
+        set(B.highCut1, .lowPass, Self.highCross)
+        set(B.highCut2, .lowPass, Self.highCross)
+        unit.globalGain = 0
+        unit.bypass = false
         apply(gains: [0, 0, 0], wet: 0)
     }
 
-    private static func setup(_ unit: AVAudioUnitEQ, _ filters: [(AVAudioUnitEQFilterType, Float)]) {
-        for (i, f) in filters.enumerated() where i < unit.bands.count {
-            let b = unit.bands[i]
-            b.filterType = f.0          // 2. ordens Butterworth – to i træk = Linkwitz-Riley 24 dB/oktav
-            b.frequency = f.1
-            b.gain = 0
-            b.bypass = false
-        }
-        unit.globalGain = 0
-        unit.bypass = false
-    }
+    func attach(to engine: AVAudioEngine) { engine.attach(unit) }
+    func detach(from engine: AVAudioEngine) { engine.detach(unit) }
+    func disconnect(in engine: AVAudioEngine) { engine.disconnectNodeOutput(unit) }
 
-    func attach(to engine: AVAudioEngine) { nodes.forEach { engine.attach($0) } }
-    func detach(from engine: AVAudioEngine) { nodes.forEach { engine.detach($0) } }
-    func disconnect(in engine: AVAudioEngine) { nodes.forEach { engine.disconnectNodeOutput($0) } }
-
-    /// Kobler kilde → (tre bånd + urørt) → sum → destination. Bagfra, så ingen ende er uenig om formatet.
+    /// Kilde → EQ → destination. Bagfra, så EQ'ens to ender aldrig er uenige om formatet.
     func connect(in engine: AVAudioEngine, from source: AVAudioNode, to destination: AVAudioNode, format: AVAudioFormat) {
-        engine.connect(sum, to: destination, format: format)
-        engine.connect(lowV, to: sum, fromBus: 0, toBus: 0, format: format)
-        engine.connect(midV, to: sum, fromBus: 0, toBus: 1, format: format)
-        engine.connect(highV, to: sum, fromBus: 0, toBus: 2, format: format)
-        engine.connect(dryV, to: sum, fromBus: 0, toBus: 3, format: format)
-        engine.connect(lowF, to: lowV, fromBus: 0, toBus: 0, format: format)
-        engine.connect(midF, to: midV, fromBus: 0, toBus: 0, format: format)
-        engine.connect(highF, to: highV, fromBus: 0, toBus: 0, format: format)
-        let points = [AVAudioConnectionPoint(node: lowF, bus: 0), AVAudioConnectionPoint(node: midF, bus: 0),
-                      AVAudioConnectionPoint(node: highF, bus: 0), AVAudioConnectionPoint(node: dryV, bus: 0)]
-        engine.connect(source, to: points, fromBus: 0, format: format)
+        engine.connect(unit, to: destination, format: format)
+        engine.connect(source, to: unit, format: format)
     }
 
-    /// Knappens dB → volumen. Ned til −20 dB som normalt; de sidste 6 dB glider ned til helt væk (kill).
+    /// Knappens dB → volumen (bruges også til at vise EQ'en i waveformen og Bas-visningen).
     static func amp(_ db: Float) -> Float {
         if db >= -20 { return powf(10, db / 20) }
         return max(0, 0.1 * (db + 26) / 6)
     }
 
-    /// `wet` 0 = urørt lyd, 1 = de tre bånd (glider imellem, så der ikke kommer et klik).
+    /// Knappens dB → filterets dB: som knappen ned til −20, derefter hurtigt ned mod −44 dB.
+    static func filterDB(_ db: Float) -> Float {
+        db >= -20 ? db : -20 + (db + 20) * 4
+    }
+
+    /// `wet` bruges ikke længere (alt neutralt = urørt), men beholdes så kaldene er de samme.
     func apply(gains g: [Float], wet: Float) {
         guard g.count >= 3 else { return }
-        let w = max(0, min(1, wet))
-        lowV.outputVolume = w * Self.amp(g[0])
-        midV.outputVolume = w * Self.amp(g[1])
-        highV.outputVolume = w * Self.amp(g[2])
-        dryV.outputVolume = 1 - w
+        let b = unit.bands
+        let low = Self.filterDB(g[0]), mid = Self.filterDB(g[1]), high = Self.filterDB(g[2])
+        let lowKill = g[0] <= -25.9, highKill = g[2] <= -25.9
+        func gain(_ i: Int, _ v: Float) { if b[i].gain != v { b[i].gain = v } }
+        func bypass(_ i: Int, _ v: Bool) { if b[i].bypass != v { b[i].bypass = v } }
+        gain(B.lowShelf, max(-96, low))
+        bypass(B.lowCut1, !lowKill); bypass(B.lowCut2, !lowKill)
+        // To overlappende klokker: halvdelen hver, så de tilsammen giver knappens værdi i midten
+        gain(B.mid1, max(-96, mid * 0.62))
+        gain(B.mid2, max(-96, mid * 0.62))
+        gain(B.highShelf, max(-96, high))
+        bypass(B.highCut1, !highKill); bypass(B.highCut2, !highKill)
     }
 }

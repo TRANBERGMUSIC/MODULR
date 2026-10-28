@@ -1,0 +1,157 @@
+Timestamp               Ty Process[PID:TID]
+2026-10-28 23:37:26.784 E  MODULR[5753:29f35] [com.apple.network:tcp] tcp_input [C10.1.1.1:3] flags=[R] seq=2310410523, ack=0, win=0 state=CLOSED rcv_nxt=2310410523, snd_una=3590946380
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36c] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36c] [com.apple.AppKit:Application] Error registering app with intents framework: Error Domain=NSCocoaErrorDomain Code=4097 UserInfo={NSDebugDescription=<private>}
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36d] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36d] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36e] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.624 E  MODULR[8990:2a36e] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.625 E  MODULR[8990:2a36e] [com.apple.appintents:Connection] Will NOT re-try to establish the connection
+2026-10-28 23:37:45.625 E  MODULR[8990:2a36c] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.625 E  MODULR[8990:2a36c] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:37:45.735 E  MODULR[8990:2a32c] [com.apple.CFBundle:plugin] AddInstanceForFactory: No factory registered for id <CFUUID 0xb9e08a2c0> F8BB1C28-BAE8-11D6-9C31-00039315CD46
+2026-10-28 23:37:45.752 E  MODULR[8990:2a32c] [com.apple.libsqlite3:logging-persist] cannot open file at line 51044 of [f0ca7bba1c]
+2026-10-28 23:37:45.752 E  MODULR[8990:2a32c] [com.apple.libsqlite3:logging-persist] os_unix.c:51044: (2) open(/private/var/db/DetachedSignatures) - No such file or directory
+2026-10-28 23:37:45.753 E  MODULR[8990:2a32c] [com.apple.audioanalytics:carc] Failed to read entitlements for process.
+2026-10-28 23:37:45.881 E  MODULR[8990:2a36d] [com.apple.BaseBoard:Common] Unable to obtain a task name port right for pid 407: (os/kern) failure (0x5)
+2026-10-28 23:37:56.058 Df MODULR[8990:2a36d] [com.apple.launchservices:default] LSExceptions shared instance invalidated for timeout.
+2026-10-28 23:38:16.123 E  MODULR[8990:2a36c] [com.apple.network:tcp] tcp_input [C1.1.1.1:3] flags=[R] seq=2943137580, ack=0, win=0 state=CLOSED rcv_nxt=2943137580, snd_una=3966552569
+2026-10-28 23:38:21.628 E  MODULR[8990:2a32c] [com.apple.audioanalytics:carc] Reporter disconnected. { function=sendMessage, reporterID=38611755991042 }
+2026-10-28 23:38:21.634 E  MODULR[8990:2a32c] [com.apple.AppKit:General] player started when in a disconnected state
+2026-10-28 23:38:21.661 E  MODULR[8990:2a32c] [com.apple.AppKit:General] (
+	0   CoreFoundation                      0x0000000186de91c0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x000000018687291c objc_exception_throw + 88
+	2   CoreFoundation                      0x0000000186de90b0 +[NSException exceptionWithName:reason:userInfo:] + 0
+	3   AVFAudio                            0x000000022c7f08c4 _ZN21AVAudioPlayerNodeImpl9StartImplEP11AVAudioTime + 712
+	4   AVFAudio                            0x000000022c7134d8 _ZN19AVAudioNodeImplBase5StartEP11AVAudioTime + 56
+	5   AVFAudio                            0x000000022c7ed1b4 -[AVAudioPlayerNode play] + 48
+	6   MODULR                              0x000000010300f738 $s6MODULR11PlayerModelC4playyyF + 172
+	7   MODULR                              0x0000000103012d1c $s6MODULR11PlayerModelC4load_8autoplay3artyAA8LibTrackV_Sb10Foundation3URLVSgtF + 3048
+	8   MODULR                              0x0000000102f82f64 $s6MODULR13TrackListViewV4bodyQrvg7SwiftUI05TupleD0VyAE0D0PAEE7paddingyQrAE4EdgeO3SetV_12CoreGraphics7CGFloatVSgtFQOyAiEEAJyQrAN_ARtFQOyAE6HStackVyAGyAiEE9lineLimityQrSiSgFQOyAE4TextV_Qo__AxGyAiEE11controlSizeyQrAE07ControlT0OFQOyAE08ProgressD0VyAE05EmptyD0VA4_G_Qo__AXtGSgA8_AE6SpacerVAiEE7overlay_9alignmentQrqd___AE9AlignmentVtAeHRd__lFQOyAiEE10background_A12_Qrqd___A14_tAeHRd__lFQOyAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyAiEE15foregroundColoryQrAE5ColorVSgFQOyAE5ImageV_Qo__AiEE5frame8minWidth10idealWidth8maxWidth9minHeight11idealHeight9maxHeightA12_QrAR_A5RA14_tFQOyAiEE14textFieldStyleyQrqd__AE0R10FieldStyleRd__lFQOyAE0R5FieldVyAXG_AE05PlainR10FieldStyleVQo__Qo_tGG_Qo__Qo__AE06_ShapeD0VyAE16RoundedRectangleVA18_GQo__AE011StrokeShapeD0VyA46_A18_A4_GQo_tGG_Qo__Qo__AiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyA22__AiEE05fixedT010horizontal8verticalQrSb_SbtFQOyAX_Qo_A10_tGG_Qo__Qo_SgAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyAX_A10_AiEEA16_yQrA19_FQOyAiEE11buttonStyleyQrqd__AE20PrimitiveButtonStyleRd__lFQOyAE6ButtonVyA21_G_AE16PlainButtonStyleVQo__Qo_tGG_Qo__Qo_SgAE19_ConditionalContentVyAA8DropZoneVAiEE9animation_5valueQrAE9AnimationVSg_qd__tSQRd__lFQOyAiEEA11_A12_7contentQrA14__qd__yXEtAeHRd__lFQOyAiAE8fileDrop8targeted7strings5filesQrAE7BindingVySbG_ySaySSGcSgySay10Foundation3URLVGctFQOyAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyAiEE11contextMenu16forSelectionType4menu13primaryActionQrqd__m_qd_0_Shyqd__GcyA107_cSgtSHRd__AeHRd_0_r0_lFQOyAiEEA15__A12_Qrqd___A14_tAeHRd__lFQOyAiEE8onChange2of7initial_Qrqd___Sbyqd___qd__tctSQRd__lFQOyAiEE9onReceive_7performQrqd___y6OutputQyd__ct7Combine9PublisherRd__s5NeverO7FailureRtd__lFQOyAiEEA109_A110_A111__Qrqd___Sbyqd___qd__tctSQRd__lFQOyAiEE25alternatingRowBackgroundsyQrAE32AlternatingRowBackgroundBehaviorVFQOyAiEE23scrollContentBackgroundyQrAE10VisibilityOFQOyAE5TableVyAA03LibB0VAE7ForEachVySayA131_GA99_4UUIDVAE15TableRowContentPAEE15dropDestination3for6actionQrqd__m_ySayqd__Gct0L12Transferable12TransferableRd__lFQOyA138_AEE9draggableyQrqd__yXAA143_A144_Rd__lFQOyAE8TableRowVyA131_G_SSQo__A101_Qo_GAE0H18TableColumnContentVyA131_A99_17KeyPathComparatorVyA131_GAE11TableColumnVyA131_A119_AA8WaveCellVAXG_A158_yA131_A119_AA5CoverVAXGA158_yA131_A156_AA10ArtistCellVAXGA158_yA131_A156_AA9TitleCellVAXGA158_yA131_A156_AA7KeyCellVAXGA158_yA131_A156_AA7BPMCellVAXGA158_yA131_A156_AA9EnergyBarVAXGA158_yA131_A156_AA12DurationCellVAXGA158_yA131_A156_AA11QualityCellVAXGtGG_Qo__Qo__SayA136_GQo__A116_9PublishedVA117_VyA136_Sg_GQo__ShyA136_GQo__AA14RightClickAreaVQo__A136_A4_Qo__Qo__Qo__Qo__AiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyAA8DropHintV_Qo__Qo_SgQo__SbQo_GtGyXEfU_yA198_cfU9_ + 792
+	9   SwiftUI                             0x00000001bc5dfd58 $sShyxGIegg_AAytIegnr_SHRzlTRTA + 32
+	10  SwiftUI                             0x00000001bbb9077c $sShy2IDs12IdentifiablePQzGytIegnr_AEIegg_13TableRowValueQy_Rsz7SwiftUI0cD7ContentR_AH0c6ColumnH0R0_AFQy0_AGRSr1_lTRTA + 40
+	11  SwiftUI                             0x00000001bbb88828 $s7SwiftUI5TableV20ChildSelectionActionV5valueyShys11AnyHashableVGcSgvgyAIcfU_ + 1160
+	12  SwiftUI                             0x00000001bbb90734 $sShys11AnyHashableVGIegg_ACytIegnr_TRTA + 32
+	13  SwiftUI                             0x00000001bbc3b074 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgFytSgyXEfU_ + 164
+	14  SwiftUICore                         0x0000000233e000f0 $s7SwiftUI6UpdateO19dispatchImmediately6reason_xAA16CustomEventTraceV06ActionH4TypeO6ReasonOSg_xyXEtlFZ + 340
+	15  SwiftUI                             0x00000001bbc3af24 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgF + 812
+	16  SwiftUI                             0x00000001bbc3b100 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgFTo + 92
+	17  AppKit                              0x000000018b3426c0 -[NSApplication(NSResponder) sendAction:to:from:] + 560
+	18  AppKit                              0x000000018b342460 -[NSControl sendAction:to:] + 72
+	19  AppKit                              0x000000018b440be8 -[NSTableView _sendAction:to:row:column:] + 112
+	20  AppKit                              0x000000018b43f47c -[NSTableView mouseDown:] + 4012
+	21  AppKit                              0x000000018b43e34c -[NSOutlineView mouseDown:] + 76
+	22  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	23  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	24  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	25  SwiftUI                             0x00000001bc259ca4 $s7SwiftUI13NSHostingViewC7magnify4withySo7NSEventC_tFyyXEfU_Tm + 120
+	26  SwiftUI                             0x00000001bc2559b8 $s7SwiftUI13NSHostingViewC9mouseDown4withySo7NSEventC_tF + 508
+	27  SwiftUI                             0x00000001bc255b60 $s7SwiftUI13NSHostingViewC9mouseDown4withySo7NSEventC_tFTo + 56
+	28  AppKit                              0x000000018b33dc04 -[NSWindow(NSEventRouting) _handleMouseDownEvent:isDelayedEvent:] + 3696
+	29  AppKit                              0x000000018b2cc1f4 -[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:] + 492
+	30  AppKit                              0x000000018b2cbe64 -[NSWindow(NSEventRouting) sendEvent:] + 380
+	31  AppKit                              0x000000018bd3c40c -[NSApplication(NSEventRouting) sendEvent:] + 1276
+	32  AppKit                              0x000000018b989664 -[NSApplication _handleEvent:] + 60
+	33  AppKit                              0x000000018b19b164 -[NSApplication run] + 408
+	34  AppKit                              0x000000018b1737b0 NSApplicationMain + 880
+	35  SwiftUI                             0x00000001bbae647c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	36  SwiftUI                             0x00000001bbe9c4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	37  SwiftUI                             0x00000001bc168344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	38  MODULR                              0x0000000102e9007c main + 36
+	39  dyld                                0x00000001868ffe00 start + 6992
+)
+2026-10-28 23:38:21.664 F  MODULR[8990:2a32c] [com.apple.hiservices:HIExceptions] FAULT: com.apple.coreaudio.avfaudio: <private>; (user info absent)
+2026-10-28 23:38:22.797 E  MODULR[8990:2a32c] [com.apple.AppKit:General] player started when in a disconnected state
+2026-10-28 23:38:22.799 E  MODULR[8990:2a32c] [com.apple.AppKit:General] (
+	0   CoreFoundation                      0x0000000186de91c0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x000000018687291c objc_exception_throw + 88
+	2   CoreFoundation                      0x0000000186de90b0 +[NSException exceptionWithName:reason:userInfo:] + 0
+	3   AVFAudio                            0x000000022c7f08c4 _ZN21AVAudioPlayerNodeImpl9StartImplEP11AVAudioTime + 712
+	4   AVFAudio                            0x000000022c7134d8 _ZN19AVAudioNodeImplBase5StartEP11AVAudioTime + 56
+	5   AVFAudio                            0x000000022c7ed1b4 -[AVAudioPlayerNode play] + 48
+	6   MODULR                              0x000000010300f738 $s6MODULR11PlayerModelC4playyyF + 172
+	7   MODULR                              0x000000010300f060 $s6MODULR11PlayerModelC9playPauseyyF + 260
+	8   MODULR                              0x000000010300ee7c $s6MODULR11PlayerModelCACycfcSo7NSEventCSgAEcfU0_ + 1248
+	9   MODULR                              0x0000000102fef5c0 $sSo7NSEventCABSgIeggo_AbCIeyBya_TR + 48
+	10  AppKit                              0x000000018b2cb57c _NSSendEventToObservers + 252
+	11  AppKit                              0x000000018bd3bf84 -[NSApplication(NSEventRouting) sendEvent:] + 116
+	12  AppKit                              0x000000018b989664 -[NSApplication _handleEvent:] + 60
+	13  AppKit                              0x000000018b19b164 -[NSApplication run] + 408
+	14  AppKit                              0x000000018b1737b0 NSApplicationMain + 880
+	15  SwiftUI                             0x00000001bbae647c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	16  SwiftUI                             0x00000001bbe9c4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	17  SwiftUI                             0x00000001bc168344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	18  MODULR                              0x0000000102e9007c main + 36
+	19  dyld                                0x00000001868ffe00 start + 6992
+)
+2026-10-28 23:38:44.261 E  MODULR[8990:2a32c] [com.apple.TextInputUI:CursorUI] ViewBridge to RemoteViewService Terminated: Error Domain=com.apple.ViewBridge Code=18 UserInfo={com.apple.ViewBridge.error.hint=this process disconnected remote view controller -- benign unless unexpected, com.apple.ViewBridge.error.description=NSViewBridgeErrorCanceled}
+2026-10-28 23:38:52.078 E  MODULR[9029:2a81b] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.078 E  MODULR[9029:2a81b] [com.apple.AppKit:Application] Error registering app with intents framework: Error Domain=NSCocoaErrorDomain Code=4097 UserInfo={NSDebugDescription=<private>}
+2026-10-28 23:38:52.078 E  MODULR[9029:2a81c] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.078 E  MODULR[9029:2a81c] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.079 E  MODULR[9029:2a822] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.079 E  MODULR[9029:2a822] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.079 E  MODULR[9029:2a822] [com.apple.appintents:Connection] Will NOT re-try to establish the connection
+2026-10-28 23:38:52.079 E  MODULR[9029:2a81b] [com.apple.appintents:Connection] Unable to get synchronousRemoteObjectProxy, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.079 E  MODULR[9029:2a81b] [com.apple.appintents:Connection] Unable to re-register with Process Instance Registry, error: Error Domain=NSCocoaErrorDomain Code=4097 "connection to service named com.apple.linkd.autoShortcut" UserInfo={NSDebugDescription=connection to service named com.apple.linkd.autoShortcut}
+2026-10-28 23:38:52.183 E  MODULR[9029:2a809] [com.apple.CFBundle:plugin] AddInstanceForFactory: No factory registered for id <CFUUID 0xa4988d660> F8BB1C28-BAE8-11D6-9C31-00039315CD46
+2026-10-28 23:38:52.201 E  MODULR[9029:2a809] [com.apple.libsqlite3:logging-persist] cannot open file at line 51044 of [f0ca7bba1c]
+2026-10-28 23:38:52.201 E  MODULR[9029:2a809] [com.apple.libsqlite3:logging-persist] os_unix.c:51044: (2) open(/private/var/db/DetachedSignatures) - No such file or directory
+2026-10-28 23:38:52.201 E  MODULR[9029:2a809] [com.apple.audioanalytics:carc] Failed to read entitlements for process.
+2026-10-28 23:38:52.330 E  MODULR[9029:2a81c] [com.apple.BaseBoard:Common] Unable to obtain a task name port right for pid 407: (os/kern) failure (0x5)
+2026-10-28 23:38:54.361 E  MODULR[9029:2a809] [com.apple.audioanalytics:carc] Reporter disconnected. { function=sendMessage, reporterID=38779259715586 }
+2026-10-28 23:38:54.362 E  MODULR[9029:2a809] [com.apple.AppKit:General] player started when in a disconnected state
+2026-10-28 23:38:54.366 E  MODULR[9029:2a809] [com.apple.AppKit:General] (
+	0   CoreFoundation                      0x0000000186de91c0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x000000018687291c objc_exception_throw + 88
+	2   CoreFoundation                      0x0000000186de90b0 +[NSException exceptionWithName:reason:userInfo:] + 0
+	3   AVFAudio                            0x000000022c7f08c4 _ZN21AVAudioPlayerNodeImpl9StartImplEP11AVAudioTime + 712
+	4   AVFAudio                            0x000000022c7134d8 _ZN19AVAudioNodeImplBase5StartEP11AVAudioTime + 56
+	5   AVFAudio                            0x000000022c7ed1b4 -[AVAudioPlayerNode play] + 48
+	6   MODULR                              0x00000001030c3738 $s6MODULR11PlayerModelC4playyyF + 172
+	7   MODULR                              0x00000001030c6d1c $s6MODULR11PlayerModelC4load_8autoplay3artyAA8LibTrackV_Sb10Foundation3URLVSgtF + 3048
+	8   MODULR                              0x0000000103036f64 $s6MODULR13TrackListViewV4bodyQrvg7SwiftUI05TupleD0VyAE0D0PAEE7paddingyQrAE4EdgeO3SetV_12CoreGraphics7CGFloatVSgtFQOyAiEEAJyQrAN_ARtFQOyAE6HStackVyAGyAiEE9lineLimityQrSiSgFQOyAE4TextV_Qo__AxGyAiEE11controlSizeyQrAE07ControlT0OFQOyAE08ProgressD0VyAE05EmptyD0VA4_G_Qo__AXtGSgA8_AE6SpacerVAiEE7overlay_9alignmentQrqd___AE9AlignmentVtAeHRd__lFQOyAiEE10background_A12_Qrqd___A14_tAeHRd__lFQOyAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyAiEE15foregroundColoryQrAE5ColorVSgFQOyAE5ImageV_Qo__AiEE5frame8minWidth10idealWidth8maxWidth9minHeight11idealHeight9maxHeightA12_QrAR_A5RA14_tFQOyAiEE14textFieldStyleyQrqd__AE0R10FieldStyleRd__lFQOyAE0R5FieldVyAXG_AE05PlainR10FieldStyleVQo__Qo_tGG_Qo__Qo__AE06_ShapeD0VyAE16RoundedRectangleVA18_GQo__AE011StrokeShapeD0VyA46_A18_A4_GQo_tGG_Qo__Qo__AiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyA22__AiEE05fixedT010horizontal8verticalQrSb_SbtFQOyAX_Qo_A10_tGG_Qo__Qo_SgAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyATyAGyAX_A10_AiEEA16_yQrA19_FQOyAiEE11buttonStyleyQrqd__AE20PrimitiveButtonStyleRd__lFQOyAE6ButtonVyA21_G_AE16PlainButtonStyleVQo__Qo_tGG_Qo__Qo_SgAE19_ConditionalContentVyAA8DropZoneVAiEE9animation_5valueQrAE9AnimationVSg_qd__tSQRd__lFQOyAiEEA11_A12_7contentQrA14__qd__yXEtAeHRd__lFQOyAiAE8fileDrop8targeted7strings5filesQrAE7BindingVySbG_ySaySSGcSgySay10Foundation3URLVGctFQOyAiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyAiEE11contextMenu16forSelectionType4menu13primaryActionQrqd__m_qd_0_Shyqd__GcyA107_cSgtSHRd__AeHRd_0_r0_lFQOyAiEEA15__A12_Qrqd___A14_tAeHRd__lFQOyAiEE8onChange2of7initial_Qrqd___Sbyqd___qd__tctSQRd__lFQOyAiEE9onReceive_7performQrqd___y6OutputQyd__ct7Combine9PublisherRd__s5NeverO7FailureRtd__lFQOyAiEEA109_A110_A111__Qrqd___Sbyqd___qd__tctSQRd__lFQOyAiEE25alternatingRowBackgroundsyQrAE32AlternatingRowBackgroundBehaviorVFQOyAiEE23scrollContentBackgroundyQrAE10VisibilityOFQOyAE5TableVyAA03LibB0VAE7ForEachVySayA131_GA99_4UUIDVAE15TableRowContentPAEE15dropDestination3for6actionQrqd__m_ySayqd__Gct0L12Transferable12TransferableRd__lFQOyA138_AEE9draggableyQrqd__yXAA143_A144_Rd__lFQOyAE8TableRowVyA131_G_SSQo__A101_Qo_GAE0H18TableColumnContentVyA131_A99_17KeyPathComparatorVyA131_GAE11TableColumnVyA131_A119_AA8WaveCellVAXG_A158_yA131_A119_AA5CoverVAXGA158_yA131_A156_AA10ArtistCellVAXGA158_yA131_A156_AA9TitleCellVAXGA158_yA131_A156_AA7KeyCellVAXGA158_yA131_A156_AA7BPMCellVAXGA158_yA131_A156_AA9EnergyBarVAXGA158_yA131_A156_AA12DurationCellVAXGA158_yA131_A156_AA11QualityCellVAXGtGG_Qo__Qo__SayA136_GQo__A116_9PublishedVA117_VyA136_Sg_GQo__ShyA136_GQo__AA14RightClickAreaVQo__A136_A4_Qo__Qo__Qo__Qo__AiEEAJyQrAN_ARtFQOyAiEEAJyQrAN_ARtFQOyAA8DropHintV_Qo__Qo_SgQo__SbQo_GtGyXEfU_yA198_cfU9_ + 792
+	9   SwiftUI                             0x00000001bc5dfd58 $sShyxGIegg_AAytIegnr_SHRzlTRTA + 32
+	10  SwiftUI                             0x00000001bbb9077c $sShy2IDs12IdentifiablePQzGytIegnr_AEIegg_13TableRowValueQy_Rsz7SwiftUI0cD7ContentR_AH0c6ColumnH0R0_AFQy0_AGRSr1_lTRTA + 40
+	11  SwiftUI                             0x00000001bbb88828 $s7SwiftUI5TableV20ChildSelectionActionV5valueyShys11AnyHashableVGcSgvgyAIcfU_ + 1160
+	12  SwiftUI                             0x00000001bbb90734 $sShys11AnyHashableVGIegg_ACytIegnr_TRTA + 32
+	13  SwiftUI                             0x00000001bbc3b074 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgFytSgyXEfU_ + 164
+	14  SwiftUICore                         0x0000000233e000f0 $s7SwiftUI6UpdateO19dispatchImmediately6reason_xAA16CustomEventTraceV06ActionH4TypeO6ReasonOSg_xyXEtlFZ + 340
+	15  SwiftUI                             0x00000001bbc3af24 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgF + 812
+	16  SwiftUI                             0x00000001bbc3b100 $s7SwiftUI29AppKitOutlineTableCoordinatorC14onDoubleAction020_4F4C0C8303607BBE8C1O11E1FC76AA7FBLLyyypSgFTo + 92
+	17  AppKit                              0x000000018b3426c0 -[NSApplication(NSResponder) sendAction:to:from:] + 560
+	18  AppKit                              0x000000018b342460 -[NSControl sendAction:to:] + 72
+	19  AppKit                              0x000000018b440be8 -[NSTableView _sendAction:to:row:column:] + 112
+	20  AppKit                              0x000000018b43f47c -[NSTableView mouseDown:] + 4012
+	21  AppKit                              0x000000018b43e34c -[NSOutlineView mouseDown:] + 76
+	22  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	23  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	24  AppKit                              0x000000018b337ec4 forwardMethod + 252
+	25  SwiftUI                             0x00000001bc259ca4 $s7SwiftUI13NSHostingViewC7magnify4withySo7NSEventC_tFyyXEfU_Tm + 120
+	26  SwiftUI                             0x00000001bc2559b8 $s7SwiftUI13NSHostingViewC9mouseDown4withySo7NSEventC_tF + 508
+	27  SwiftUI                             0x00000001bc255b60 $s7SwiftUI13NSHostingViewC9mouseDown4withySo7NSEventC_tFTo + 56
+	28  AppKit                              0x000000018b33dc04 -[NSWindow(NSEventRouting) _handleMouseDownEvent:isDelayedEvent:] + 3696
+	29  AppKit                              0x000000018b2cc1f4 -[NSWindow(NSEventRouting) _reallySendEvent:isDelayedEvent:] + 492
+	30  AppKit                              0x000000018b2cbe64 -[NSWindow(NSEventRouting) sendEvent:] + 380
+	31  AppKit                              0x000000018bd3c40c -[NSApplication(NSEventRouting) sendEvent:] + 1276
+	32  AppKit                              0x000000018b989664 -[NSApplication _handleEvent:] + 60
+	33  AppKit                              0x000000018b19b164 -[NSApplication run] + 408
+	34  AppKit                              0x000000018b1737b0 NSApplicationMain + 880
+	35  SwiftUI                             0x00000001bbae647c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	36  SwiftUI                             0x00000001bbe9c4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	37  SwiftUI                             0x00000001bc168344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	38  MODULR                              0x0000000102f4407c main + 36
+	39  dyld                                0x00000001868ffe00 start + 6992
+)
+2026-10-28 23:38:54.370 F  MODULR[9029:2a809] [com.apple.hiservices:HIExceptions] FAULT: com.apple.coreaudio.avfaudio: <private>; (user info absent)
+2026-10-28 23:39:02.129 Df MODULR[9029:2a918] [com.apple.launchservices:default] LSExceptions shared instance invalidated for timeout.
+2026-10-28 23:44:03.664 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1623  HALC_ProxyIOContext::IOWorkLoop: skipping cycle due to overload
+2026-10-28 23:44:03.669 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26672 want: 1)
+2026-10-28 23:44:04.083 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1623  HALC_ProxyIOContext::IOWorkLoop: skipping cycle due to overload
+2026-10-28 23:44:04.084 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26711 want: 1)
+2026-10-28 23:44:04.116 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26714 want: 26713)
+2026-10-28 23:44:04.361 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26737 want: 26734)
+2026-10-28 23:44:04.919 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1623  HALC_ProxyIOContext::IOWorkLoop: skipping cycle due to overload
+2026-10-28 23:44:04.926 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26790 want: 1)
+2026-10-28 23:44:05.095 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1623  HALC_ProxyIOContext::IOWorkLoop: skipping cycle due to overload
+2026-10-28 23:44:05.098 E  MODULR[9029:2a82e] [com.apple.coreaudio:AMCP]          HALC_ProxyIOContext.cpp:1631  HALC_ProxyIOContext::IOWorkLoop: context 509 received an out of order message (got 26806 want: 1)
