@@ -155,6 +155,81 @@ enum SongStructure {
     }
 }
 
+// MARK: - Dine egne sektioner
+
+extension SongStructure {
+    /// Rydder op efter en rettelse: sorteret, ingen huller eller overlap, hele takter, og numrene
+    /// (1. drop, 2. drop …) talt forfra. Sektioner på under én takt forsvinder.
+    static func normalize(_ input: [SongSection], bpm: Double, firstBeat: Double, duration: Double) -> [SongSection] {
+        guard bpm > 0, duration > 0 else { return input }
+        let barSec = 60 / bpm * 4
+        let lastBar = max(1, Int(((duration - firstBeat) / barSec).rounded(.down)))
+        var list = input.sorted { $0.startBar < $1.startBar }
+        list = list.filter { $0.endBar - $0.startBar >= 1 }
+        guard !list.isEmpty else { return [] }
+        for i in list.indices {
+            list[i].startBar = max(0, min(lastBar - 1, list[i].startBar))
+            if i + 1 < list.count { list[i].endBar = list[i + 1].startBar }
+        }
+        list[0].startBar = min(list[0].startBar, 0)
+        list[list.count - 1].endBar = max(list[list.count - 1].endBar, lastBar)
+        list = list.filter { $0.endBar - $0.startBar >= 1 }
+        for i in list.indices where i + 1 < list.count { list[i].endBar = list[i + 1].startBar }
+        if !list.isEmpty { list[0].startBar = 0; list[list.count - 1].endBar = max(list[list.count - 1].endBar, lastBar) }
+        var counts = [SectionKind: Int]()
+        for i in list.indices {
+            counts[list[i].kind, default: 0] += 1
+            list[i].ordinal = counts[list[i].kind]!
+            list[i].start = firstBeat + Double(list[i].startBar) * barSec
+            list[i].end = min(duration, firstBeat + Double(list[i].endBar) * barSec)
+        }
+        return list
+    }
+
+    /// Flyt grænsen mellem sektion i-1 og i til en ny takt.
+    static func moveBoundary(_ secs: [SongSection], index i: Int, toBar bar: Int,
+                             bpm: Double, firstBeat: Double, duration: Double) -> [SongSection] {
+        guard i > 0, i < secs.count else { return secs }
+        var list = secs
+        let lo = list[i - 1].startBar + 1
+        let hi = list[i].endBar - 1
+        guard lo <= hi else { return secs }
+        let b = max(lo, min(hi, bar))
+        list[i - 1].endBar = b
+        list[i].startBar = b
+        return normalize(list, bpm: bpm, firstBeat: firstBeat, duration: duration)
+    }
+
+    /// Del sektionen der dækker takten i to (den nye del får samme type, til du skifter den).
+    static func split(_ secs: [SongSection], atBar bar: Int, kind: SectionKind? = nil,
+                      bpm: Double, firstBeat: Double, duration: Double) -> [SongSection] {
+        guard let i = secs.firstIndex(where: { $0.startBar < bar && bar < $0.endBar }) else { return secs }
+        var list = secs
+        var second = list[i]
+        second.startBar = bar
+        if let kind { second.kind = kind }
+        list[i].endBar = bar
+        list.insert(second, at: i + 1)
+        return normalize(list, bpm: bpm, firstBeat: firstBeat, duration: duration)
+    }
+
+    /// Slå sektion i sammen med den næste (den første bestemmer typen).
+    static func mergeWithNext(_ secs: [SongSection], index i: Int, bpm: Double, firstBeat: Double, duration: Double) -> [SongSection] {
+        guard i >= 0, i + 1 < secs.count else { return secs }
+        var list = secs
+        list[i].endBar = list[i + 1].endBar
+        list.remove(at: i + 1)
+        return normalize(list, bpm: bpm, firstBeat: firstBeat, duration: duration)
+    }
+
+    static func setKind(_ secs: [SongSection], index i: Int, _ kind: SectionKind, bpm: Double, firstBeat: Double, duration: Double) -> [SongSection] {
+        guard secs.indices.contains(i) else { return secs }
+        var list = secs
+        list[i].kind = kind
+        return normalize(list, bpm: bpm, firstBeat: firstBeat, duration: duration)
+    }
+}
+
 // MARK: - Regler for cue points
 
 /// Hvor en hot cue skal sidde: første slag eller starten af en bestemt sektion – plus/minus et antal takter.

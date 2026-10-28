@@ -524,11 +524,11 @@ final class LibraryStore: ObservableObject {
     // MARK: EQ-områder
 
     func addEQRegion(_ id: UUID, _ r: EQRegionData) {
-        update(id) { $0.eqRegions = ($0.eqRegions ?? []) + [r] }
+        edit(id, "Nyt EQ-område") { $0.eqRegions = ($0.eqRegions ?? []) + [r] }
     }
 
     func updateEQRegion(_ id: UUID, _ rid: UUID, _ change: (inout EQRegionData) -> Void) {
-        update(id) {
+        edit(id, "EQ-område") {
             guard var list = $0.eqRegions, let i = list.firstIndex(where: { $0.id == rid }) else { return }
             change(&list[i])
             if list[i].end < list[i].start { let s = list[i].start; list[i].start = list[i].end; list[i].end = s }
@@ -537,7 +537,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func removeEQRegion(_ id: UUID, _ rid: UUID) {
-        update(id) {
+        edit(id, "Slet EQ-område") {
             $0.eqRegions?.removeAll { $0.id == rid }
             if $0.eqRegions?.isEmpty == true { $0.eqRegions = nil }
         }
@@ -790,7 +790,7 @@ final class LibraryStore: ObservableObject {
     // MARK: Grid og markeringer
 
     func setGrid(_ id: UUID, bpm: Double, firstBeatMs: Double) {
-        update(id) {
+        edit(id, "Grid") {
             $0.bpm = max(40, min(300, bpm))
             $0.firstBeatMs = firstBeatMs
             $0.gridEdited = true
@@ -799,15 +799,30 @@ final class LibraryStore: ObservableObject {
 
     /// Hot cue A–H: sæt (sekunder) eller slet (nil).
     func setHotCue(_ id: UUID, _ letter: String, at seconds: Double?) {
-        update(id) {
+        edit(id, seconds == nil ? "Slet hot cue \(letter)" : "Hot cue \(letter)") {
             var h = $0.hotCues ?? [:]
             h[letter] = seconds
             $0.hotCues = h.isEmpty ? nil : h
         }
     }
 
+    /// Flere hot cues på én gang (fx forslagene) – ét skridt at fortryde.
+    func setHotCues(_ id: UUID, _ cues: [String: Double], label: String) {
+        guard !cues.isEmpty else { return }
+        edit(id, label) {
+            var h = $0.hotCues ?? [:]
+            for (l, t) in cues { h[l] = t }
+            $0.hotCues = h
+        }
+    }
+
+    /// Dine egne sektioner (nil = brug appens forslag igen).
+    func setSections(_ id: UUID, _ sections: [SongSection]?, label: String) {
+        edit(id, label) { $0.sections = sections?.isEmpty == true ? nil : sections }
+    }
+
     func addCue(_ id: UUID, at seconds: Double) {
-        update(id) {
+        edit(id, "Memory cue") {
             var c = $0.cues ?? []
             if !c.contains(where: { abs($0 - seconds) < 0.05 }) { c.append(seconds) }
             $0.cues = c.sorted()
@@ -815,7 +830,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func removeCue(_ id: UUID, near seconds: Double, tolerance: Double) {
-        update(id) {
+        edit(id, "Slet memory cue") {
             guard var c = $0.cues, let i = c.indices.min(by: { abs(c[$0] - seconds) < abs(c[$1] - seconds) }),
                   abs(c[i] - seconds) <= tolerance else { return }
             c.remove(at: i)
@@ -1055,7 +1070,11 @@ final class LibraryStore: ObservableObject {
         analysis["memory_cues"] = memory.sorted()
         // Sangens opbygning → phrases på CDJ-3000 (intro/up/down/chorus/outro som rekordbox)
         if let bpm = t.bpm, bpm > 0, let dur = t.duration, dur > 0 {
-            let secs = SongStructure.analyze(bands: bands(t), bpm: bpm, firstBeat: (t.firstBeatMs ?? 0) / 1000, duration: dur)
+            // Dine egne sektioner, hvis du har rettet dem – ellers appens forslag
+            let fb = (t.firstBeatMs ?? 0) / 1000
+            let secs = (t.sections?.isEmpty == false)
+                ? SongStructure.normalize(t.sections ?? [], bpm: bpm, firstBeat: fb, duration: dur)
+                : SongStructure.analyze(bands: bands(t), bpm: bpm, firstBeat: fb, duration: dur)
             analysis["phrases"] = secs.map { ["beat": $0.startBar * BeatGrid.beatsPerBar + 1, "kind": $0.kind.rawValue] as [String: Any] }
             if let last = secs.last { analysis["phrase_end_beat"] = last.endBar * BeatGrid.beatsPerBar }
         }

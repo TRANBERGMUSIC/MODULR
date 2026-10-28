@@ -10,9 +10,9 @@ import AppKit
 import MediaPlayer
 
 struct EQSettings: Codable, Equatable {
-    var low: Double = 0      // dB, lav shelf 70 Hz (−26 … +6, som en DJM)
-    var mid: Double = 0      // dB, klokke 1 kHz
-    var high: Double = 0     // dB, høj shelf 13 kHz
+    var low: Double = 0      // dB, bas og kick under 220 Hz (−26 = kill … +6)
+    var mid: Double = 0      // dB, 220 Hz–3 kHz (vokal, synth)
+    var high: Double = 0     // dB, over 3 kHz (hihats, luft)
 
     var isFlat: Bool { abs(low) < 0.05 && abs(mid) < 0.05 && abs(high) < 0.05 }
 
@@ -122,12 +122,22 @@ final class PlayerModel: ObservableObject {
     @Published var clipped = false
     @Published var peakDB: Double = -80     // højeste top (til tooltip)
 
-    @Published var eq = EQSettings() { didSet { appliedEQ = nil; applyActiveEQ() } }
+    @Published var eq = EQSettings() {
+        didSet {
+            appliedEQ = nil
+            applyActiveEQ()
+            // Kan fortrydes (men ikke når en ny sang nulstiller EQ'en)
+            if !resettingEQ, oldValue != eq, let id = track?.id {
+                EditHistory.shared.recordEQ(track: id, before: oldValue, after: eq)
+            }
+        }
+    }
+    private var resettingEQ = false
     @Published var volume: Double = 0.85 { didSet { engine.mainMixerNode.outputVolume = Float(volume) } }
 
     private let engine = AVAudioEngine()
     private var node = AVAudioPlayerNode()
-    private var eqUnit = AVAudioUnitEQ(numberOfBands: 3)
+    private var iso = IsolatorEQ()
     /// Formatet kæden sidst blev koblet med (samplerate + kanaler)
     private var connectedFormat: (rate: Double, channels: AVAudioChannelCount)?
     private var file: AVAudioFile?
@@ -144,8 +154,7 @@ final class PlayerModel: ObservableObject {
 
     init() {
         engine.attach(node)
-        engine.attach(eqUnit)
-        EQSettings().configure(eqUnit)
+        iso.attach(to: engine)
         engine.mainMixerNode.outputVolume = Float(volume)
         setupRemoteCommands()
         keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] e in
@@ -262,7 +271,9 @@ final class PlayerModel: ObservableObject {
         bands = LibraryStore.shared.bands(t)
         peaks = LibraryStore.shared.peaks(t)
         if bands.isEmpty || peaks.isEmpty { analyzeWave(t) }
+        resettingEQ = true
         eq = EQSettings()
+        resettingEQ = false
         clipped = false
         holdDB = -80
         startFrame = 0
@@ -324,7 +335,7 @@ final class PlayerModel: ObservableObject {
     private func connect(format: AVAudioFormat) {
         if engine.isRunning { engine.stop() }
         if tapInstalled {
-            eqUnit.removeTap(onBus: 0)
+            iso.output.removeTap(onBus: 0)
             tapInstalled = false
         }
         // Ny samplerate eller nyt antal kanaler (fx 44,1 → 48 kHz): helt nye enheder i stedet for at koble om.
@@ -333,24 +344,22 @@ final class PlayerModel: ObservableObject {
         let same = connectedFormat.map { $0.rate == format.sampleRate && $0.channels == format.channelCount } ?? false
         if !same {
             engine.detach(node)
-            engine.detach(eqUnit)
+            iso.detach(from: engine)
             node = AVAudioPlayerNode()
-            eqUnit = AVAudioUnitEQ(numberOfBands: 3)
+            iso = IsolatorEQ()
             engine.attach(node)
-            engine.attach(eqUnit)
-            EQSettings().configure(eqUnit)
+            iso.attach(to: engine)
         } else {
             engine.disconnectNodeOutput(node)
-            engine.disconnectNodeOutput(eqUnit)
+            iso.disconnect(in: engine)
         }
-        // Bagfra: EQ → mixer først, så afspiller → EQ – så EQ'ens to ender aldrig er uenige om formatet
-        engine.connect(eqUnit, to: engine.mainMixerNode, format: format)
-        engine.connect(node, to: eqUnit, format: format)
+        // Bagfra: EQ → mixer først, så afspiller → EQ – så EQ'ens ender aldrig er uenige om formatet
+        iso.connect(in: engine, from: node, to: engine.mainMixerNode, format: format)
         connectedFormat = (format.sampleRate, format.channelCount)
         appliedEQ = nil            // tving EQ'en ud på den (evt. nye) enhed
         applyActiveEQ()
         let box = meter
-        eqUnit.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
+        iso.output.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
             guard let d = buf.floatChannelData else { return }
             let frames = Int(buf.frameLength)
             let n = vDSP_Length(frames)
@@ -432,6 +441,19 @@ final class PlayerModel: ObservableObject {
 
     /// Intro/buildup/drop/breakdown/outro for sangen der er indlæst.
     var sections: [SongSection] {
+        if let t = liveTrack, let own = t.sections, !own.isEmpty {
+            // Dine egne sektioner ligger i takter – tiderne regnes fra det aktuelle grid (hvis du retter det bagefter)
+            guard let bpm = t.bpm, bpm > 0 else { return own }
+            return SongStructure.normalize(own, bpm: bpm, firstBeat: (t.firstBeatMs ?? 0) / 1000, duration: duration)
+        }
+        return autoSections
+    }
+
+    /// Har du selv rettet sektionerne på denne sang?
+    var hasOwnSections: Bool { !(liveTrack?.sections ?? []).isEmpty }
+
+    /// Appens eget forslag (bruges indtil du selv har rettet).
+    var autoSections: [SongSection] {
         guard let t = liveTrack, let bpm = t.bpm, bpm > 0, !bands.isEmpty else { return [] }
         let key = "\(t.id)-\(bpm)-\(t.firstBeatMs ?? 0)-\(bands.count)"
         if let c = sectionCache, c.key == key { return c.value }
@@ -485,15 +507,17 @@ final class PlayerModel: ObservableObject {
     func applySuggestions(only ids: Set<String>? = nil) {
         guard let t = liveTrack else { return }
         var n = 0
+        var set = [String: Double]()
         for s in cueSuggestions {
             guard let letter = s.letter, t.hotCues?[letter] == nil else { continue }
             if let ids, !ids.contains(s.id) { continue }
-            LibraryStore.shared.setHotCue(t.id, letter, at: s.at)
+            set[letter] = s.at
             if s.target.section != nil, s.moved != 0 || s.learned != 0 {
                 CueRules.learnOffset(s.target, bars: s.learned + s.moved)
             }
             n += 1
         }
+        LibraryStore.shared.setHotCues(t.id, set, label: n == 1 ? "Sæt cue-forslag" : "Sæt \(n) cue-forslag")
         LibraryStore.shared.lastMessage = n > 0 ? "\(n) hot cue\(n == 1 ? "" : "s") sat i rækkefølge" : "Ingen ledige forslag"
     }
 
@@ -513,21 +537,28 @@ final class PlayerModel: ObservableObject {
         if active != appliedEQ {
             appliedEQ = active
             targetGains = active.gains
+            targetWet = active.isFlat ? 0 : 1
             if !playing {
                 currentGains = targetGains
-                EQSettings.setGains(eqUnit, currentGains)
+                currentWet = targetWet
+                iso.apply(gains: currentGains, wet: currentWet)
             }
         }
         smoothEQ()
     }
 
+    private var currentWet: Float = 0
+    private var targetWet: Float = 0
+
     private func smoothEQ() {
-        guard currentGains != targetGains else { return }
+        guard currentGains != targetGains || currentWet != targetWet else { return }
         for i in 0..<3 {
             let d = targetGains[i] - currentGains[i]
             currentGains[i] = abs(d) < 0.05 ? targetGains[i] : currentGains[i] + d * 0.45
         }
-        EQSettings.setGains(eqUnit, currentGains)
+        let dw = targetWet - currentWet
+        currentWet = abs(dw) < 0.02 ? targetWet : currentWet + dw * 0.45
+        iso.apply(gains: currentGains, wet: currentWet)
     }
 
     /// Nærmeste slag (quantize, som Q på en CDJ).
@@ -725,12 +756,12 @@ enum EQRender {
         let fmt = file.processingFormat
         let engine = AVAudioEngine()
         let node = AVAudioPlayerNode()
-        let unit = AVAudioUnitEQ(numberOfBands: 3)
-        eq.configure(unit)
+        // Samme isolator som afspilleren – det du hører, er det der gemmes
+        let iso = IsolatorEQ()
         engine.attach(node)
-        engine.attach(unit)
-        engine.connect(node, to: unit, format: fmt)
-        engine.connect(unit, to: engine.mainMixerNode, format: fmt)
+        iso.attach(to: engine)
+        iso.connect(in: engine, from: node, to: engine.mainMixerNode, format: fmt)
+        iso.apply(gains: eq.gains, wet: eq.isFlat ? 0 : 1)
         let maxFrames: AVAudioFrameCount = 4096
         try engine.enableManualRenderingMode(.offline, format: fmt, maximumFrameCount: maxFrames)
         try engine.start()
@@ -754,7 +785,7 @@ enum EQRender {
             let t = Double(now) / sr
             let active: EQSettings = regions.first(where: { $0.contains(t) }).map { EQSettings(low: $0.low, mid: $0.mid, high: $0.high) } ?? eq
             if active != applied {
-                active.configure(unit)
+                iso.apply(gains: active.gains, wet: active.isFlat ? 0 : 1)
                 applied = active
             }
             var left = file.length - now

@@ -49,6 +49,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var cues: [Double]?           // dine markeringer (sekunder) til at planlægge sættet
     var hotCues: [String: Double]? // hot cues A–H (sekunder), som på en CDJ
     var eqRegions: [EQRegionData]? // EQ på bestemte stykker af sangen (høres live, kan gemmes i filen)
+    var sections: [SongSection]?  // dine egne sektioner (intro, drop …) – ellers bruges appens forslag
     var deadSpace: Double?        // sekunders stilhed til sidst
     var trimmed: Bool?            // død luft er fjernet
 

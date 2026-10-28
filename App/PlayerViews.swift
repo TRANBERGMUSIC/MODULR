@@ -4,7 +4,7 @@
 import SwiftUI
 import AppKit
 
-enum PlayerMode: Hashable { case play, grid, eq, cues }
+enum PlayerMode: Hashable { case play, grid, eq, cues, bass }
 
 // MARK: - Panelet
 
@@ -49,6 +49,7 @@ struct PlayerPanel: View {
                             case .grid: GridEditBar(track: t)
                             case .eq: EQPanel(track: t)
                             case .cues: CueTools(track: t)
+                            case .bass: LowEndPanel(track: t)
                             case .play: EmptyView()
                             }
                         }
@@ -94,8 +95,10 @@ struct PlayerPanel: View {
                     .contentTransition(.numericText(value: t.bpm ?? 0))
                     .fixedSize()
                 if !compact {
+                    UndoRedoButtons()
                     ModSegmented(selection: $mode, options: [(PlayerMode.play, "Afspil"), (PlayerMode.grid, "Grid"),
-                                                             (PlayerMode.cues, "Cues"), (PlayerMode.eq, "EQ")])
+                                                             (PlayerMode.cues, "Cues"), (PlayerMode.eq, "EQ"),
+                                                             (PlayerMode.bass, "Bas")])
                         .fixedSize()
                 }
             }
@@ -308,6 +311,8 @@ struct DetailWaveform: View {
         // 2) Waveformen som i rekordbox: toppe i høj opløsning, én skærm-pixel ad gangen, farven fra
         //    frekvensbåndene (bas rød, mellem grøn, diskant blå). Ingen udglatning – transienterne står skarpt.
         let peaks = player.peaks
+        // Din EQ ses i waveformen: et dræbt bånd forsvinder (farve og højde)
+        let eqAt = player.eqVisual(track)
         if bands.count >= 3 {
             let s = max(1, Double(scale))
             let px = 1 / s
@@ -353,6 +358,13 @@ struct DetailWaveform: View {
                     for c in ca..<end {
                         lo += Double(bands[c * 3]); mi += Double(bands[c * 3 + 1]); hi += Double(bands[c * 3 + 2])
                     }
+                }
+                if let eqAt {
+                    let g = eqAt(tm)
+                    let tot = lo + mi + hi
+                    if tot > 0 { amp *= (lo * g.0 + mi * g.1 + hi * g.2) / tot }
+                    lo *= g.0; mi *= g.1; hi *= g.2
+                    if amp < 1 { continue }
                 }
                 guard let c = WaveColor.rgb(lo, mi, hi, floor: 0.1, boost: true) else { continue }
                 // Farverne samles i spande, så hele waveformen tegnes med få fyld-kald
@@ -630,47 +642,143 @@ struct BarRuler: View {
 
 struct SectionStrip: View {
     @ObservedObject private var player = PlayerModel.shared
+    @State private var hoverHandle: Int?
+    @State private var dragging: Int?
+
+    /// Grid-tal til at regne takter om til tid
+    var grid: (bpm: Double, fb: Double, barSec: Double)? {
+        guard let t = player.liveTrack, let bpm = t.bpm, bpm > 0 else { return nil }
+        return (bpm, (t.firstBeatMs ?? 0) / 1000, 60 / bpm * 4)
+    }
 
     var body: some View {
         let secs = player.sections
+        let own = player.hasOwnSections
         let dur: Double = max(0.001, player.duration)
         GeometryReader { g in
             let w = g.size.width
             ZStack(alignment: .leading) {
                 ForEach(Array(secs.enumerated()), id: \.offset) { item in
-                    let s = item.element
-                    let x0: CGFloat = w * CGFloat(max(0, s.start) / dur)
-                    let x1: CGFloat = w * CGFloat(min(dur, s.end) / dur)
-                    let c = s.kind.rgb
-                    // Sektionen der spiller nu lyser op
-                    let active: Bool = player.position >= s.start && player.position < s.end
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 3).fill(Color(red: c.0, green: c.1, blue: c.2).opacity(active ? 0.95 : 0.3))
-                        if active {
-                            RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.8), lineWidth: 1)
-                        }
-                        if x1 - x0 > 44 {
-                            Text(s.ordinal > 1 && (s.kind == .drop || s.kind == .breakdown || s.kind == .buildup)
-                                 ? "\(s.kind.title) \(s.ordinal)" : s.kind.title)
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(active ? Color.black : Color(red: c.0, green: c.1, blue: c.2))
-                                .lineLimit(1)
-                                .padding(.leading, 4)
-                        }
-                    }
-                    .frame(width: max(1, x1 - x0 - 1))
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // Som en hot cue: hop til starten af sektionen (og afspil, hvis den står stille)
-                        player.seek(seconds: s.start)
-                        if !player.playing { player.play() }
-                    }
-                    .offset(x: x0)
-                    .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar). Klik for at hoppe dertil.")
+                    box(item.offset, item.element, secs: secs, w: w, dur: dur, own: own)
+                }
+                // Grænserne kan trækkes (hele takter) – så laver du dine egne sektioner
+                ForEach(Array(secs.indices.dropFirst()), id: \.self) { i in
+                    handle(i, secs: secs, w: w, dur: dur)
                 }
             }
+            .coordinateSpace(name: "sections")
         }
         .opacity(secs.isEmpty ? 0 : 1)
+    }
+
+    func box(_ i: Int, _ s: SongSection, secs: [SongSection], w: CGFloat, dur: Double, own: Bool) -> some View {
+        let x0: CGFloat = w * CGFloat(max(0, s.start) / dur)
+        let x1: CGFloat = w * CGFloat(min(dur, s.end) / dur)
+        let c = s.kind.rgb
+        let color = Color(red: c.0, green: c.1, blue: c.2)
+        // Sektionen der spiller nu lyser op
+        let active: Bool = player.position >= s.start && player.position < s.end
+        return ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3).fill(color.opacity(active ? 0.95 : 0.3))
+            if active {
+                RoundedRectangle(cornerRadius: 3).stroke(Color.white.opacity(0.8), lineWidth: 1)
+            }
+            if x1 - x0 > 44 {
+                Text(s.ordinal > 1 && (s.kind == .drop || s.kind == .breakdown || s.kind == .buildup)
+                     ? "\(s.kind.title) \(s.ordinal)" : s.kind.title)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(active ? Color.black : color)
+                    .lineLimit(1)
+                    .padding(.leading, 4)
+            }
+        }
+        .frame(width: max(1, x1 - x0 - 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Som en hot cue: hop til starten af sektionen (og afspil, hvis den står stille)
+            player.seek(seconds: s.start)
+            if !player.playing { player.play() }
+        }
+        .modMenu(title: "\(s.kind.title) · takt \(s.startBar + 1)–\(s.endBar)",
+                 subtitle: own ? "Dine egne sektioner" : "Appens forslag – ret det, så bliver det dit") { menu(i, secs: secs) }
+        .offset(x: x0)
+        .help("\(s.kind.title) – takt \(s.startBar + 1)–\(s.endBar). Klik for at hoppe dertil · træk i kanterne for at flytte · højreklik for at skifte type, dele eller slå sammen."
+              + (own ? "" : "\nAppens forslag – indtil du retter det."))
+    }
+
+    func handle(_ i: Int, secs: [SongSection], w: CGFloat, dur: Double) -> some View {
+        let x: CGFloat = w * CGFloat(secs[i].start / dur)
+        let lit = hoverHandle == i || dragging == i
+        return Rectangle()
+            .fill(Color.clear)
+            .frame(width: 9)
+            .overlay(Capsule().fill(Color.white.opacity(lit ? 0.95 : 0)).frame(width: 2))
+            .contentShape(Rectangle())
+            .offset(x: x - 4.5)
+            .onHover { inside in
+                if inside { hoverHandle = i; NSCursor.resizeLeftRight.push() } else {
+                    if hoverHandle == i { hoverHandle = nil }
+                    NSCursor.pop()
+                }
+            }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("sections"))
+                .onChanged { v in
+                    guard let gr = grid, let t = player.liveTrack else { return }
+                    dragging = i
+                    let time = Double(v.location.x / max(1, w)) * dur
+                    let bar = Int(((time - gr.fb) / gr.barSec).rounded())
+                    let cur = player.sections
+                    let new = SongStructure.moveBoundary(cur, index: i, toBar: bar, bpm: gr.bpm, firstBeat: gr.fb, duration: player.duration)
+                    if new != cur || !player.hasOwnSections {
+                        LibraryStore.shared.setSections(t.id, new, label: "Flyt sektionsgrænse")
+                    }
+                }
+                .onEnded { _ in dragging = nil })
+            .help("Træk for at flytte grænsen (hele takter)")
+    }
+
+    func menu(_ i: Int, secs: [SongSection]) -> [MMItem] {
+        guard let gr = grid, let t = player.liveTrack else { return [] }
+        let dur = player.duration
+        let id = t.id
+        func save(_ list: [SongSection], _ label: String) { LibraryStore.shared.setSections(id, list, label: label) }
+        var items = [MMItem]()
+        let kinds: [MMItem] = SectionKind.allCases.map { k in
+            MMItem.action(k.title + (k == secs[i].kind ? "  ✓" : ""), icon: "rectangle.fill") {
+                save(SongStructure.setKind(secs, index: i, k, bpm: gr.bpm, firstBeat: gr.fb, duration: dur), "Sektion → \(k.title)")
+            }
+        }
+        items.append(.submenu("Skift til", icon: "tag", kinds))
+        let playBar = Int(((player.position - gr.fb) / gr.barSec).rounded())
+        if playBar > secs[i].startBar && playBar < secs[i].endBar {
+            items.append(.action("Del ved afspilningshovedet (takt \(playBar + 1))", icon: "scissors") {
+                save(SongStructure.split(secs, atBar: playBar, bpm: gr.bpm, firstBeat: gr.fb, duration: dur), "Del sektion")
+            })
+        } else {
+            let mid = (secs[i].startBar + secs[i].endBar) / 2
+            if mid > secs[i].startBar {
+                items.append(.action("Del på midten (takt \(mid + 1))", icon: "scissors") {
+                    save(SongStructure.split(secs, atBar: mid, bpm: gr.bpm, firstBeat: gr.fb, duration: dur), "Del sektion")
+                })
+            }
+        }
+        if i > 0 {
+            items.append(.action("Slå sammen med forrige", icon: "arrow.left.to.line") {
+                save(SongStructure.mergeWithNext(secs, index: i - 1, bpm: gr.bpm, firstBeat: gr.fb, duration: dur), "Slå sektioner sammen")
+            })
+        }
+        if i + 1 < secs.count {
+            items.append(.action("Slå sammen med næste", icon: "arrow.right.to.line") {
+                save(SongStructure.mergeWithNext(secs, index: i, bpm: gr.bpm, firstBeat: gr.fb, duration: dur), "Slå sektioner sammen")
+            })
+        }
+        if player.hasOwnSections {
+            items.append(.divider)
+            items.append(.action("Gendan appens forslag", icon: "wand.and.stars") {
+                LibraryStore.shared.setSections(id, nil, label: "Gendan appens sektioner")
+            })
+        }
+        return items
     }
 }
 
@@ -792,30 +900,14 @@ struct LevelMeter: View {
 // MARK: - Grid-redigering (som rekordbox' GRID EDIT)
 
 /// Fortryd/gentag for grid-ændringer.
+/// Grid-fortryd bruger nu det fælles forløb (⌘Z), så det også gælder cues, sektioner og EQ.
 final class GridHistory {
     static let shared = GridHistory()
-    private var undoStack: [UUID: [(Double, Double)]] = [:]
-    private var redoStack: [UUID: [(Double, Double)]] = [:]
-
-    func push(_ t: LibTrack) {
-        undoStack[t.id, default: []].append((t.bpm ?? 0, t.firstBeatMs ?? 0))
-        redoStack[t.id] = []
-    }
-
-    func canUndo(_ id: UUID) -> Bool { !(undoStack[id] ?? []).isEmpty }
-    func canRedo(_ id: UUID) -> Bool { !(redoStack[id] ?? []).isEmpty }
-
-    func undo(_ t: LibTrack) {
-        guard let last = undoStack[t.id]?.popLast() else { return }
-        redoStack[t.id, default: []].append((t.bpm ?? 0, t.firstBeatMs ?? 0))
-        LibraryStore.shared.setGrid(t.id, bpm: last.0, firstBeatMs: last.1)
-    }
-
-    func redo(_ t: LibTrack) {
-        guard let next = redoStack[t.id]?.popLast() else { return }
-        undoStack[t.id, default: []].append((t.bpm ?? 0, t.firstBeatMs ?? 0))
-        LibraryStore.shared.setGrid(t.id, bpm: next.0, firstBeatMs: next.1)
-    }
+    func push(_ t: LibTrack) {}
+    func canUndo(_ id: UUID) -> Bool { EditHistory.shared.canUndo }
+    func canRedo(_ id: UUID) -> Bool { EditHistory.shared.canRedo }
+    func undo(_ t: LibTrack) { EditHistory.shared.undo() }
+    func redo(_ t: LibTrack) { EditHistory.shared.redo() }
 }
 
 struct GridEditBar: View {
@@ -845,10 +937,7 @@ struct GridEditBar: View {
             Group {
                 gridButton(text: "|||×2", help: "Dobbelt BPM") { setBPM(bpm * 2) }
                 gridButton(text: "|||×½", help: "Halv BPM") { setBPM(bpm / 2) }
-                gridButton(icon: "arrow.uturn.backward", help: "Fortryd") { GridHistory.shared.undo(track) }
-                    .disabled(!GridHistory.shared.canUndo(track.id))
-                gridButton(icon: "arrow.uturn.forward", help: "Gentag") { GridHistory.shared.redo(track) }
-                    .disabled(!GridHistory.shared.canRedo(track.id))
+                UndoRedoButtons()
                 gridButton(icon: "1.square", help: "Takt 1 her: sæt takt 1 ved afspilningshovedet") { downbeatHere() }
             }
             Spacer(minLength: 0)
@@ -1303,9 +1392,9 @@ struct EQPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             regionBar
             HStack(spacing: 18) {
-                Knob(title: "Lows", value: binding(\.low, base: \.low))
-                Knob(title: "Mids", value: binding(\.mid, base: \.mid))
-                Knob(title: "High", value: binding(\.high, base: \.high))
+                band("Lows", "Bas og kick · under 220 Hz", binding(\.low, base: \.low))
+                band("Mids", "Vokal og synth · 220 Hz–3 kHz", binding(\.mid, base: \.mid))
+                band("High", "Hihats og luft · over 3 kHz", binding(\.high, base: \.high))
                 VStack(alignment: .leading, spacing: 6) {
                     Text(editing == nil ? "EQ for hele sangen – høres med det samme." :
                             "EQ kun i det valgte område (\(barText(editing!))) – høres når afspilningen er der.")
@@ -1328,6 +1417,34 @@ struct EQPanel: View {
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    @State private var beforeKill: [String: Double] = [:]
+
+    /// Knap + KILL-knap: som en isolator på en DJ-mixer – båndet forsvinder næsten helt (som stems).
+    func band(_ title: String, _ about: String, _ value: Binding<Double>) -> some View {
+        let killed = value.wrappedValue <= -25.9
+        return VStack(spacing: 4) {
+            Knob(title: title, value: value)
+            Button {
+                if killed {
+                    value.wrappedValue = beforeKill[title] ?? 0
+                } else {
+                    beforeKill[title] = value.wrappedValue
+                    value.wrappedValue = -26
+                }
+            } label: {
+                Text("KILL")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundColor(killed ? .white : .mist.opacity(0.6))
+                    .frame(width: 40, height: 18)
+                    .background(RoundedRectangle(cornerRadius: 4)
+                        .fill(killed ? Color(red: 0.9, green: 0.22, blue: 0.18) : Color.white.opacity(0.07)))
+            }
+            .buttonStyle(.press)
+            .help("\(title): \(about). Klik = fjern båndet helt (klik igen for at få det tilbage)")
+        }
+        .animation(Motion.snappy, value: killed)
     }
 
     var regionBar: some View {

@@ -772,6 +772,17 @@ do {
     let sug3 = CueRules.suggestions(plan: mixed, sections: secs, bpm: bpm, firstBeat: 0, gridStart: 0, duration: duration, moved: [dropID: -4])
     let d0 = sug.first { $0.id == dropID }?.at ?? 0, d3 = sug3.first { $0.id == dropID }?.at ?? 0
     check("Flyt forslag 4 takter", abs((d0 - d3) - 4 * barSec) < 0.01, "\(d0) → \(d3)")
+    // Egne sektioner: flyt grænse, del, slå sammen – altid sammenhængende og nummereret
+    let moved = SongStructure.moveBoundary(secs, index: 2, toBar: 20, bpm: bpm, firstBeat: 0, duration: duration)
+    check("Flyt grænse: drop starter i takt 21", moved[2].startBar == 20 && moved[1].endBar == 20, "\(moved.map { "\($0.kind.rawValue)@\($0.startBar)" })")
+    check("Flyt grænse: ingen huller", zip(moved, moved.dropFirst()).allSatisfy { $0.endBar == $1.startBar })
+    let tooFar = SongStructure.moveBoundary(secs, index: 2, toBar: 0, bpm: bpm, firstBeat: 0, duration: duration)
+    check("Flyt grænse: kan ikke æde sektionen før", tooFar[1].endBar - tooFar[1].startBar >= 1)
+    let splitS = SongStructure.split(secs, atBar: 28, kind: .breakdown, bpm: bpm, firstBeat: 0, duration: duration)
+    check("Del sektion", splitS.count == secs.count + 1 && splitS.contains { $0.startBar == 28 && $0.kind == .breakdown })
+    check("Del: numre talt forfra", splitS.filter { $0.kind == .breakdown }.map(\.ordinal) == Array(1...splitS.filter { $0.kind == .breakdown }.count))
+    let mergedS = SongStructure.mergeWithNext(secs, index: 0, bpm: bpm, firstBeat: 0, duration: duration)
+    check("Slå sammen", mergedS.count == secs.count - 1 && mergedS[0].endBar == secs[1].endBar)
     // EQ-område
     let r = EQRegionData(start: 10, end: 20, low: 4)
     check("EQ-område dækker sit stykke", r.contains(10) && r.contains(19.9) && !r.contains(20))

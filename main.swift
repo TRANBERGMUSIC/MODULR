@@ -812,6 +812,13 @@ struct UpdateBanner: View {
 
 // MARK: - App
 
+enum EditMenu {
+    static var textFocused: Bool {
+        guard let r = NSApp.keyWindow?.firstResponder else { return false }
+        return r is NSText || r is NSTextView
+    }
+}
+
 @main
 struct ModulrApp: App {
     @StateObject private var model = AppModel()
@@ -855,6 +862,17 @@ struct ModulrApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Søg efter opdateringer…") { updater.check(manual: true) }
+            }
+            // ⌘Z / ⇧⌘Z: i et tekstfelt fortryder det teksten – ellers dine rettelser på sangene (cues, grid, EQ …)
+            CommandGroup(replacing: .undoRedo) {
+                Button("Fortryd") {
+                    if EditMenu.textFocused { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) } else { EditHistory.shared.undo() }
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                Button("Gentag") {
+                    if EditMenu.textFocused { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } else { EditHistory.shared.redo() }
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
             }
         }
 
