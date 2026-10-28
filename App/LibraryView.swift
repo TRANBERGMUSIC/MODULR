@@ -15,6 +15,30 @@ enum LibSelection: Hashable {
     case usbPending(String, String) // drev-id, ny playlistes nøgle
 }
 
+/// macOS skjuler rækkerne man trækker ud af en tabel – og viser dem ikke altid igen, når de ikke er flyttet
+/// (de er jo kun KOPIERET til en playliste). Så tæller listen "200 sange", men tabellen ser tom ud.
+/// Når et træk fra en tabel slutter, tegnes tabellen derfor forfra.
+final class TableDragWatch: ObservableObject {
+    static let shared = TableDragWatch()
+    @Published var epoch = 0
+    private var timer: Timer?
+
+    /// Kaldes når et træk starter (fra trækkets indhold, som først laves når man begynder at trække).
+    func started() {
+        guard timer == nil else { return }
+        DispatchQueue.main.async { [self] in
+            guard timer == nil else { return }
+            timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] t in
+                guard let self, NSEvent.pressedMouseButtons & 1 == 0 else { return }
+                t.invalidate()
+                self.timer = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.epoch += 1 }
+            }
+            RunLoop.main.add(timer!, forMode: .common)
+        }
+    }
+}
+
 final class LibraryUIState: ObservableObject {
     @Published var selection: LibSelection = .smart(.all)
     @Published var keyFilter: Set<MusicalKey> = []
@@ -652,6 +676,7 @@ struct QualityText: View {
 // MARK: - Sangtabellen
 
 struct TrackListView: View {
+    @ObservedObject private var dragWatch = TableDragWatch.shared
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var settings: FBSettings
@@ -774,6 +799,7 @@ struct TrackListView: View {
                             }
                     }
                 }
+                .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
                 .alternatingRowBackgrounds(.disabled)
                 .onChange(of: rows.map(\.id), initial: true) { _, _ in
@@ -831,6 +857,7 @@ struct TrackListView: View {
     }
 
     func dragPayload(for t: LibTrack) -> String {
+        TableDragWatch.shared.started()
         let ids = ui.tableSelection.contains(t.id) ? Array(ui.tableSelection) : [t.id]
         return "tracks:" + ids.map(\.uuidString).joined(separator: ",")
     }
@@ -1802,6 +1829,7 @@ struct WaveSwatch: View {
 }
 
 struct UsbPlaylistView: View {
+    @ObservedObject private var dragWatch = TableDragWatch.shared
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var library: LibraryStore
     let driveID: String
@@ -1840,9 +1868,13 @@ struct UsbPlaylistView: View {
                 } rows: {
                     ForEach(list) { t in
                         TableRow(t)
-                            .draggable(UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url)))
+                            .draggable({ () -> UsbDragItem in
+                                TableDragWatch.shared.started()
+                                return UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url))
+                            }())
                     }
                 }
+                .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
                 .alternatingRowBackgrounds(.disabled)
                 .background(RightClickArea { row, e in
