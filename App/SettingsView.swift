@@ -98,71 +98,44 @@ struct LoudnessSettingsView: View {
     }
 }
 
-/// Dine regler for hvor hot cues A–H skal foreslås – og hvad appen har lært af dig.
+/// Din plan for hvor hot cues A–H skal foreslås – og hvad appen har lært af dig.
 struct CueRulesSettingsView: View {
-    @State private var rules: [String: CueRule] = CueRules.rules
+    @ObservedObject private var player = PlayerModel.shared
     @State private var learnOn: Bool = CueRules.learnEnabled
-    @State private var learned = CueRules.learned
+    @State private var learned = CueRules.learnedOffsets
 
     var body: some View {
         Form {
-            Section("Hvor skal cues foreslås?") {
-                ForEach(HotCue.letters, id: \.self) { letter in
-                    row(letter)
+            Section("Hvilke dele skal have hot cues?") {
+                TextField("Plan", text: $player.cuePlanText, axis: .vertical)
+                    .lineLimit(2...4)
+                let parsed = player.cuePlan
+                if !parsed.unknown.isEmpty {
+                    Text("Forstår ikke: \(parsed.unknown.joined(separator: ", "))").font(.caption).foregroundColor(.orange)
                 }
-                Button("Gendan standard") {
-                    rules = CueRules.defaults
-                    CueRules.rules = rules
-                }
+                Text(parsed.parts.isEmpty ? "Ingen dele" : parsed.parts.map { CuePlan.text(for: $0) }.joined(separator: "  →  "))
+                    .font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text("Skriv delene adskilt med komma: første slag, intro, groove, buildup, drop, breakdown, outro. Med nummer (drop 2, andet drop), \"alle drops\", \"sidste breakdown\" og takter (+16, \"4 takter før drop\"). Bogstaverne A–H gives altid i tidsrækkefølge – H kommer aldrig før G. Står to dele samme sted, vinder den du skrev først; er der flere end 8, beholdes de første.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Gendan standard") { player.cuePlanText = CuePlan.standard }
             }
             Section("Lær af mig") {
-                Toggle("Lær hvordan jeg selv sætter cues", isOn: $learnOn)
+                Toggle("Lær hvordan jeg flytter cues", isOn: $learnOn)
                     .onChange(of: learnOn) { _, v in CueRules.learnEnabled = v }
-                Text("Når du sætter en hot cue selv, noterer appen hvor i sangen den ligger (fx \"1. drop\" eller \"16 takter efter første slag\"). Efter 3 sange med samme mønster bruges dit mønster i stedet for reglen ovenfor.")
+                Text("Flytter du et forslag før du sætter det (eller sætter du selv en cue lidt før en sektion), noterer appen det. Efter 3 gange med samme flytning gør den det selv – fx droppet altid 4 takter tidligere.")
                     .font(.caption).foregroundStyle(.secondary)
+                ForEach(CueRule.Target.allCases.filter { $0.section != nil }) { t in
+                    if let l = CueRules.learnedOffset(for: t), l.bars != 0 {
+                        Text("\(t.title): \(abs(l.bars)) takter \(l.bars < 0 ? "før" : "efter") (\(l.count)×)")
+                            .font(.caption).foregroundColor(.orange)
+                    }
+                }
                 Button("Glem det lærte") {
-                    CueRules.learned = [:]
+                    CueRules.learnedOffsets = [:]
                     learned = [:]
                 }
                 .disabled(learned.isEmpty)
             }
         }
-    }
-
-    func row(_ letter: String) -> some View {
-        let rule = rules[letter] ?? CueRule(target: .none)
-        let c = HotCue.rgb[letter] ?? (1, 1, 1)
-        return HStack(spacing: 10) {
-            Text(letter)
-                .font(.system(size: 12, weight: .heavy)).foregroundColor(.black)
-                .frame(width: 22, height: 22)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color(red: c.0, green: c.1, blue: c.2)))
-            Picker("", selection: Binding(get: { rule.target }, set: { v in set(letter) { $0.target = v } })) {
-                ForEach(CueRule.Target.allCases) { t in Text(t.title).tag(t) }
-            }
-            .labelsHidden()
-            .frame(width: 130)
-            if rule.target != .none && rule.target != .firstBeat {
-                Stepper("Nr. \(rule.ordinal)", value: Binding(get: { rule.ordinal }, set: { v in set(letter) { $0.ordinal = max(1, v) } }), in: 1...6)
-                    .frame(width: 110)
-            }
-            if rule.target != .none {
-                Stepper(rule.offsetBars == 0 ? "Lige på" : "\(rule.offsetBars > 0 ? "+" : "")\(rule.offsetBars) takter",
-                        value: Binding(get: { rule.offsetBars }, set: { v in set(letter) { $0.offsetBars = v } }), in: -32...64, step: 4)
-                    .frame(width: 150)
-            }
-            Spacer()
-            if learnOn, let l = CueRules.learnedRule(for: letter) {
-                Text("Lært: \(l.rule.summary) (\(l.count)×)")
-                    .font(.caption).foregroundColor(.orange)
-            }
-        }
-    }
-
-    func set(_ letter: String, _ change: (inout CueRule) -> Void) {
-        var r = rules[letter] ?? CueRule(target: .none)
-        change(&r)
-        rules[letter] = r
-        CueRules.rules = rules
     }
 }

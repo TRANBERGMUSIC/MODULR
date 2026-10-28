@@ -743,8 +743,35 @@ do {
     check("Regel-nøgle rundtur", CueRule(key: CueRule(target: .breakdown, ordinal: 2, offsetBars: -4).key) == CueRule(target: .breakdown, ordinal: 2, offsetBars: -4))
     let described = CueRules.describe(40 * barSec + 0.05, sections: secs, bpm: bpm, firstBeat: 0)
     check("Din cue genkendes som '1. breakdown'", described == CueRule(target: .breakdown, ordinal: 1, offsetBars: 0), "\(described?.summary ?? "-")")
-    let sug = CueRules.suggestions(sections: secs, bpm: bpm, firstBeat: 0, duration: duration)
-    check("Forslag A–H findes", sug["A"] == 0 && sug["E"] != nil && sug["H"] != nil, "\(sug.keys.sorted())")
+    // Plan i fri tekst
+    let p1 = CuePlan.parse("første slag, andet drop, 4 takter før drop, alle breakdowns, sidste drop +8, outro, blabla")
+    check("Plan: første slag", p1.parts.first == CueRule(target: .firstBeat))
+    check("Plan: 'andet drop'", p1.parts.count > 1 && p1.parts[1] == CueRule(target: .drop, ordinal: 2))
+    check("Plan: '4 takter før drop'", p1.parts.count > 2 && p1.parts[2] == CueRule(target: .drop, ordinal: 1, offsetBars: -4))
+    check("Plan: 'alle breakdowns'", p1.parts.count > 3 && p1.parts[3] == CueRule(target: .breakdown, ordinal: 0))
+    check("Plan: 'sidste drop +8'", p1.parts.count > 4 && p1.parts[4] == CueRule(target: .drop, ordinal: -1, offsetBars: 8))
+    check("Plan: ukendt ord vises", p1.unknown == ["blabla"], "\(p1.unknown)")
+    check("Plan: 'drop 2' og 'build-up'", CuePlan.parse("drop 2, build-up").parts == [CueRule(target: .drop, ordinal: 2), CueRule(target: .buildup)])
+
+    // Forslagene: altid i tidsrækkefølge, uanset rækkefølgen i planen
+    let mixed = CuePlan.parse("outro, drop 2, første slag, breakdown, drop, buildup").parts
+    let sug = CueRules.suggestions(plan: mixed, sections: secs, bpm: bpm, firstBeat: 0, gridStart: 0, duration: duration)
+    let letters = sug.compactMap(\.letter)
+    check("Forslag findes", sug.count >= 5, "\(sug.map(\.title))")
+    check("Bogstaver i tidsrækkefølge", letters == Array(HotCue.letters.prefix(letters.count)) && zip(sug, sug.dropFirst()).allSatisfy { $0.at < $1.at },
+          "\(sug.map { "\($0.letter ?? "-")@\(Int($0.at))" })")
+    check("A = første slag", sug.first?.at == 0 && sug.first?.letter == "A")
+    // Med dine egne cues: forslag får bogstaver der passer ind (H aldrig før G)
+    let mine: [String: Double] = ["A": 0, "H": duration - 4 * barSec]
+    let sug2 = CueRules.suggestions(plan: mixed, sections: secs, bpm: bpm, firstBeat: 0, gridStart: 0, duration: duration, existing: mine)
+    let order2 = (sug2.compactMap { s in s.letter.map { ($0, s.at) } } + mine.map { ($0.key, $0.value) }).sorted { $0.1 < $1.1 }.map(\.0)
+    check("Rækkefølge med egne cues", order2 == order2.sorted(), "\(order2)")
+    check("Første slag foreslås ikke igen (A er sat)", !sug2.contains { abs($0.at) < 0.01 })
+    // Flyt et forslag 4 takter tidligere
+    let dropID = sug.first { $0.target == .drop }?.id ?? ""
+    let sug3 = CueRules.suggestions(plan: mixed, sections: secs, bpm: bpm, firstBeat: 0, gridStart: 0, duration: duration, moved: [dropID: -4])
+    let d0 = sug.first { $0.id == dropID }?.at ?? 0, d3 = sug3.first { $0.id == dropID }?.at ?? 0
+    check("Flyt forslag 4 takter", abs((d0 - d3) - 4 * barSec) < 0.01, "\(d0) → \(d3)")
     // EQ-område
     let r = EQRegionData(start: 10, end: 20, low: 4)
     check("EQ-område dækker sit stykke", r.contains(10) && r.contains(19.9) && !r.contains(20))

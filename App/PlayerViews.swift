@@ -34,7 +34,7 @@ struct PlayerPanel: View {
                                     .frame(height: 104)
                                     .revealWipe(trigger: t.id)
                                 VStack(spacing: 2) {
-                                    OverviewWaveform(track: t, zoom: zoom).frame(height: 38)
+                                    OverviewWaveform(track: t, zoom: zoom, suggestions: mode == .cues).frame(height: 38)
                                         .revealWipe(trigger: t.id)
                                     BarRuler(track: t).frame(height: 14)
                                     SectionStrip().frame(height: 14)
@@ -462,9 +462,10 @@ struct DetailWaveform: View {
 
         // Forslag til hot cues (stiplede, kun i Cues-fanen og kun for tomme bogstaver)
         if showSuggestions {
-            for (letter, at) in player.cueSuggestions where track.hotCues?[letter] == nil && at >= t0 && at <= t0 + zoom {
-                let x = (at - t0) / secsPerPx
-                let c = HotCue.rgb[letter] ?? (1, 1, 1)
+            for sug in player.cueSuggestions where sug.at >= t0 && sug.at <= t0 + zoom {
+                let letter = sug.letter ?? "·"
+                let x = (sug.at - t0) / secsPerPx
+                let c = sug.letter.flatMap { HotCue.rgb[$0] } ?? (0.6, 0.6, 0.6)
                 let color = Color(red: c.0, green: c.1, blue: c.2)
                 var dash = Path()
                 dash.move(to: CGPoint(x: x, y: 16))
@@ -500,6 +501,7 @@ struct OverviewWaveform: View {
     @ObservedObject private var library = LibraryStore.shared
     let track: LibTrack
     let zoom: Double?
+    var suggestions: Bool = false
     @State private var hover = false
 
     var body: some View {
@@ -539,6 +541,23 @@ struct OverviewWaveform: View {
                         .frame(width: 11, height: 11)
                         .background(RoundedRectangle(cornerRadius: 2).fill(Color(red: c.0, green: c.1, blue: c.2)))
                         .offset(x: w * CGFloat(at / dur) - 5.5, y: -9)
+                }
+                // Forslag (kun i Cues-fanen): stiplede bogstaver, så du ser hele planen på én gang
+                if suggestions {
+                    ForEach(player.cueSuggestions) { sug in
+                        let c = sug.letter.flatMap { HotCue.rgb[$0] } ?? (0.6, 0.6, 0.6)
+                        let color = Color(red: c.0, green: c.1, blue: c.2)
+                        let x: CGFloat = w * CGFloat(sug.at / dur)
+                        Rectangle().fill(color.opacity(0.7)).frame(width: 1)
+                            .offset(x: x - 0.5)
+                        Text(sug.letter ?? "·")
+                            .font(.system(size: 9, weight: .heavy)).foregroundColor(color)
+                            .frame(width: 11, height: 11)
+                            .background(RoundedRectangle(cornerRadius: 2).fill(Color.black.opacity(0.75)))
+                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(color, style: StrokeStyle(lineWidth: 1, dash: [2, 1.5])))
+                            .offset(x: x - 5.5, y: -9)
+                    }
+                    .transition(.opacity)
                 }
                 Rectangle().fill(Color.white).frame(width: 2).offset(x: w * frac - 1)
                 if hover {
@@ -900,7 +919,122 @@ struct CueTools: View {
 
     var memory: [Double] { track.cues ?? [] }
 
+    var suggestions: [CueSuggestion] { player.cueSuggestions }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            buttonsRow
+            planRow
+            suggestionRow
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
+        .animation(Motion.snappy, value: suggestions.map(\.id))
+    }
+
+    // MARK: Planen – skriv selv hvilke dele der skal have hot cues
+
+    var planRow: some View {
+        let parsed = player.cuePlan
+        return HStack(spacing: 8) {
+            Image(systemName: "text.cursor")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.mist.opacity(0.6))
+            TextField("Fx: første slag, buildup, drop, breakdown, drop 2, outro", text: $player.cuePlanText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.3)))
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .stroke(parsed.unknown.isEmpty ? Color.white.opacity(0.08) : Color.orange.opacity(0.6), lineWidth: 1))
+                .help("Skriv de dele du vil have hot cues på, adskilt med komma. Forstår: første slag, intro, groove, buildup, drop, breakdown, outro – med nummer (drop 2, andet drop), \"alle drops\", \"sidste breakdown\" og takter (+16, \"4 takter før drop\"). Bogstaverne A–H gives altid i tidsrækkefølge.")
+            if !parsed.unknown.isEmpty {
+                Text("Forstår ikke: \(parsed.unknown.joined(separator: ", "))")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.orange)
+                    .lineLimit(1)
+                    .transition(.opacity)
+            }
+            Menu {
+                ForEach(addable) { item in
+                    Button(item.title) { append(item.text) }
+                }
+                Divider()
+                Button("Gendan standardplanen") { player.cuePlanText = CuePlan.standard }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28, height: 26)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.08)))
+            .help("Tilføj en del til planen")
+            if !player.cueMoved.isEmpty || !player.cueDismissed.isEmpty {
+                Button { player.resetSuggestions() } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .buttonStyle(CueToolStyle())
+                .help("Fortryd dine flytninger og fjernede forslag i denne sang")
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+    }
+
+    struct PlanItem: Identifiable {
+        var title: String
+        var text: String
+        var id: String { title }
+    }
+
+    var addable: [PlanItem] {
+        var out = [PlanItem(title: "Første slag", text: "første slag"), PlanItem(title: "16 takter inde", text: "første slag +16")]
+        // De dele sangen faktisk har – så du kan se hvad der kan vælges
+        for sec in player.sections {
+            let many = player.sections.filter { $0.kind == sec.kind }.count > 1
+            let title = many ? "\(sec.ordinal). \(sec.kind.title.lowercased())" : sec.kind.title
+            let rule = CueRule(target: CueRule.Target(rawValue: sec.kind.rawValue) ?? .none, ordinal: sec.ordinal)
+            out.append(PlanItem(title: title + " · takt \(sec.startBar + 1)", text: CuePlan.text(for: rule)))
+        }
+        out.append(PlanItem(title: "Alle drops", text: "alle drops"))
+        out.append(PlanItem(title: "Sidste breakdown", text: "sidste breakdown"))
+        return out
+    }
+
+    func append(_ text: String) {
+        let cur = player.cuePlanText.trimmingCharacters(in: .whitespaces)
+        player.cuePlanText = cur.isEmpty ? text : (cur.hasSuffix(",") ? cur + " " + text : cur + ", " + text)
+    }
+
+    // MARK: Forslagene – se dem, flyt dem, sæt dem
+
+    @ViewBuilder
+    var suggestionRow: some View {
+        if suggestions.isEmpty {
+            Text(emptyText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.mist.opacity(0.55))
+                .frame(height: 44)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(suggestions) { sug in
+                        SuggestionCard(sug: sug)
+                            .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    }
+                }
+            }
+        }
+    }
+
+    var emptyText: String {
+        if player.sections.isEmpty { return "Ingen forslag endnu – sangen skal have BPM og være analyseret, før opbygningen kan findes" }
+        if player.cuePlan.parts.isEmpty { return "Skriv hvilke dele du vil have hot cues på – eller klik + for at vælge" }
+        if HotCue.letters.allSatisfy({ track.hotCues?[$0] != nil }) { return "Alle hot cues A–H er sat" }
+        return "Delene i din plan findes ikke i sangen (eller er allerede sat)"
+    }
+
+    var buttonsRow: some View {
         HStack(spacing: 6) {
             ForEach(HotCue.letters, id: \.self) { letter in
                 hotCueButton(letter)
@@ -928,18 +1062,17 @@ struct CueTools: View {
             .disabled(memory.isEmpty)
             .help("Slet nærmeste memory cue")
             Spacer(minLength: 0)
-            let open: Int = player.cueSuggestions.keys.filter { track.hotCues?[$0] == nil }.count
+            let open: Int = suggestions.filter { $0.letter != nil }.count
             Button {
                 player.applySuggestions()
             } label: {
-                Label(open > 0 ? "Sæt forslag (\(open))" : "Forslag sat", systemImage: "wand.and.stars")
+                Label(open > 0 ? "Sæt alle forslag (\(open))" : "Ingen ledige forslag", systemImage: "wand.and.stars")
+                    .contentTransition(.numericText(value: Double(open)))
             }
             .buttonStyle(.ember)
             .disabled(open == 0)
-            .help("Sætter de stiplede forslag på de tomme hot cues – ud fra dine regler i Indstillinger → Cues, eller det appen har lært af dig")
+            .help("Sætter forslagene nedenfor på deres bogstaver – i tidsrækkefølge, og uden at røre de hot cues du selv har sat")
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
     }
 
     func hotCueButton(_ letter: String) -> some View {
@@ -964,6 +1097,107 @@ struct CueTools: View {
             set ? [MMItem.action("Slet hot cue \(letter)", icon: "trash", destructive: true) { PlayerModel.shared.hotCue(letter, delete: true) }] : []
         }
     }
+}
+
+/// Ét forslag: bogstav, del og takt. Klik = lyt dertil · ‹ › = flyt én takt (⇧ = 4 takter) · ✓ = sæt · × = fjern.
+struct SuggestionCard: View {
+    @ObservedObject private var player = PlayerModel.shared
+    let sug: CueSuggestion
+    @State private var hover = false
+
+    var color: Color {
+        guard let l = sug.letter, let c = HotCue.rgb[l] else { return Color(white: 0.5) }
+        return Color(red: c.0, green: c.1, blue: c.2)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(sug.letter ?? "–")
+                .font(.system(size: 13, weight: .heavy))
+                .foregroundColor(color)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(0.35)))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(color, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(sug.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.mist)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("takt \(sug.bar) · \(clock(sug.at))")
+                        .contentTransition(.numericText(value: Double(sug.bar)))
+                    if sug.moved != 0 {
+                        Text("\(sug.moved > 0 ? "+" : "−")\(abs(sug.moved))")
+                            .foregroundColor(.ember)
+                    } else if sug.learned != 0 {
+                        Text("lært \(sug.learned > 0 ? "+" : "−")\(abs(sug.learned))")
+                            .foregroundColor(.orange.opacity(0.8))
+                            .help("Du plejer at flytte denne del \(abs(sug.learned)) takter \(sug.learned < 0 ? "tidligere" : "senere")")
+                    }
+                }
+                .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                .foregroundColor(.mist.opacity(0.55))
+                if sug.letter == nil {
+                    Text("Ingen plads i rækkefølgen")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.orange)
+                }
+            }
+            .frame(minWidth: 84, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { player.seek(seconds: sug.at) }
+            .help("Klik for at hoppe dertil og lytte")
+            VStack(spacing: 2) {
+                HStack(spacing: 2) {
+                    iconButton("chevron.left", help: "Flyt én takt tidligere (⇧: 4 takter)") { move(-1) }
+                    iconButton("chevron.right", help: "Flyt én takt senere (⇧: 4 takter)") { move(1) }
+                }
+                HStack(spacing: 2) {
+                    iconButton("checkmark", help: "Sæt kun denne", tint: .ember) { player.applySuggestions(only: [sug.id]) }
+                        .disabled(sug.letter == nil)
+                    iconButton("xmark", help: "Fjern forslaget i denne sang") { player.dismissSuggestion(sug.id) }
+                }
+            }
+        }
+        .padding(.leading, 6).padding(.trailing, 4).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(hover ? 0.08 : 0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(color.opacity(hover ? 0.5 : 0.18), lineWidth: 1))
+        .onHover { h in withAnimation(Motion.hover) { hover = h } }
+        .modMenu(title: sug.title) {
+            [MMItem.action("Flyt 8 takter tidligere", icon: "backward.end") { player.moveSuggestion(sug.id, bars: -8) },
+             MMItem.action("Flyt 4 takter tidligere", icon: "chevron.left.2") { player.moveSuggestion(sug.id, bars: -4) },
+             MMItem.action("Flyt 4 takter senere", icon: "chevron.right.2") { player.moveSuggestion(sug.id, bars: 4) },
+             MMItem.action("Flyt 8 takter senere", icon: "forward.end") { player.moveSuggestion(sug.id, bars: 8) },
+             MMItem.divider,
+             MMItem.action("Sæt kun denne", icon: "checkmark", enabled: sug.letter != nil) { player.applySuggestions(only: [sug.id]) },
+             MMItem.action("Fjern forslaget", icon: "xmark", destructive: true) { player.dismissSuggestion(sug.id) }]
+        }
+    }
+
+    func move(_ bars: Int) {
+        let n = NSEvent.modifierFlags.contains(.shift) ? bars * 4 : bars
+        player.moveSuggestion(sug.id, bars: n)
+        player.seek(seconds: max(0, sug.at + Double(n) * barSec))
+    }
+
+    var barSec: Double {
+        guard let bpm = player.liveTrack?.bpm, bpm > 0 else { return 0 }
+        return 60 / bpm * 4
+    }
+
+    func iconButton(_ icon: String, help: String, tint: Color = .mist, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(tint.opacity(0.9))
+                .frame(width: 18, height: 16)
+                .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.07)))
+        }
+        .buttonStyle(.press)
+        .help(help)
+    }
+
+    func clock(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }
 }
 
 struct CueToolStyle: ButtonStyle {

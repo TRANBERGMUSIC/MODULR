@@ -84,7 +84,14 @@ final class PlayerModel: ObservableObject {
     static let shared = PlayerModel()
 
     @Published var track: LibTrack? {
-        didSet { if NowPlayingKey.shared.id != track?.id { NowPlayingKey.shared.id = track?.id } }
+        didSet {
+            if NowPlayingKey.shared.id != track?.id { NowPlayingKey.shared.id = track?.id }
+            // Ny sang: dine flytninger af forslagene hørte til den forrige
+            if oldValue?.id != track?.id, !cueMoved.isEmpty || !cueDismissed.isEmpty {
+                cueMoved = [:]
+                cueDismissed = []
+            }
+        }
     }
     @Published var playing = false {
         didSet { if NowPlayingKey.shared.playing != playing { NowPlayingKey.shared.playing = playing } }
@@ -433,21 +440,61 @@ final class PlayerModel: ObservableObject {
         return v
     }
 
-    /// Forslag til hot cues A–H ud fra dine regler (eller det appen har lært af dig).
-    var cueSuggestions: [String: Double] {
-        guard let t = liveTrack, let bpm = t.bpm, bpm > 0 else { return [:] }
-        return CueRules.suggestions(sections: sections, bpm: bpm, firstBeat: autoCue(for: t), duration: duration)
+    /// Planen du har skrevet ("første slag, buildup, drop …") – gemmes.
+    @Published var cuePlanText: String = CueRules.planText {
+        didSet { CueRules.planText = cuePlanText }
+    }
+    /// Takter du har flyttet hvert forslag i denne sang, og forslag du har fjernet.
+    @Published var cueMoved: [String: Int] = [:]
+    @Published var cueDismissed: Set<String> = []
+
+    private var planCache: (text: String, parts: [CueRule], unknown: [String])?
+
+    /// Planen som dele (læses kun igen når teksten ændres – waveformen tegnes mange gange i sekundet).
+    var cuePlan: (parts: [CueRule], unknown: [String]) {
+        if let c = planCache, c.text == cuePlanText { return (c.parts, c.unknown) }
+        let p = CuePlan.parse(cuePlanText)
+        planCache = (cuePlanText, p.parts, p.unknown)
+        return p
     }
 
-    /// Sætter forslagene på de tomme hot cues (dine egne bliver aldrig overskrevet).
-    func applySuggestions() {
+    /// Forslag til hot cues A–H: delene fra din plan, i tidsrækkefølge.
+    var cueSuggestions: [CueSuggestion] {
+        guard let t = liveTrack, let bpm = t.bpm, bpm > 0 else { return [] }
+        return CueRules.suggestions(plan: cuePlan.parts, sections: sections, bpm: bpm, firstBeat: autoCue(for: t),
+                                    gridStart: (t.firstBeatMs ?? 0) / 1000, duration: duration,
+                                    existing: t.hotCues ?? [:], moved: cueMoved, dismissed: cueDismissed)
+    }
+
+    /// Flyt et forslag et antal takter (før du sætter det).
+    func moveSuggestion(_ id: String, bars: Int) {
+        cueMoved[id, default: 0] += bars
+    }
+
+    func dismissSuggestion(_ id: String) {
+        cueDismissed.insert(id)
+    }
+
+    func resetSuggestions() {
+        cueMoved = [:]
+        cueDismissed = []
+    }
+
+    /// Sætter forslagene (alle, eller kun de valgte) på deres bogstaver. Dine egne cues overskrives aldrig.
+    /// Hvis du flyttede et forslag, husker appen det – flytter du fx altid droppet 4 takter tidligere, gør den det selv.
+    func applySuggestions(only ids: Set<String>? = nil) {
         guard let t = liveTrack else { return }
         var n = 0
-        for (letter, at) in cueSuggestions where t.hotCues?[letter] == nil {
-            LibraryStore.shared.setHotCue(t.id, letter, at: at)
+        for s in cueSuggestions {
+            guard let letter = s.letter, t.hotCues?[letter] == nil else { continue }
+            if let ids, !ids.contains(s.id) { continue }
+            LibraryStore.shared.setHotCue(t.id, letter, at: s.at)
+            if s.target.section != nil, s.moved != 0 || s.learned != 0 {
+                CueRules.learnOffset(s.target, bars: s.learned + s.moved)
+            }
             n += 1
         }
-        LibraryStore.shared.lastMessage = n > 0 ? "\(n) hot cues sat ud fra forslagene" : "Alle forslag er allerede sat"
+        LibraryStore.shared.lastMessage = n > 0 ? "\(n) hot cue\(n == 1 ? "" : "s") sat i rækkefølge" : "Ingen ledige forslag"
     }
 
     // MARK: EQ-områder (live)
@@ -537,10 +584,11 @@ final class PlayerModel: ObservableObject {
         } else {
             let at = quantized(position)
             LibraryStore.shared.setHotCue(t.id, letter, at: at)
-            // Lær hvordan du sætter cues: hvor i opbygningen lagde du den?
+            // Lær hvordan du sætter cues: ligger den lidt før/efter en sektionsstart, noteres forskydningen
             if let bpm = t.bpm, bpm > 0,
-               let rule = CueRules.describe(at, sections: sections, bpm: bpm, firstBeat: autoCue(for: t)) {
-                CueRules.learn(letter: letter, rule: rule)
+               let rule = CueRules.describe(at, sections: sections, bpm: bpm, firstBeat: autoCue(for: t)),
+               rule.target.section != nil, abs(rule.offsetBars) <= 4 {
+                CueRules.learnOffset(rule.target, bars: rule.offsetBars)
             }
         }
     }

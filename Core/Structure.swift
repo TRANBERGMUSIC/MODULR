@@ -1,5 +1,5 @@
 // MODULR – kerne: sangens opbygning (intro, buildup, drop, breakdown, outro), forslag til cue points A–H
-// ud fra regler du selv kan sætte, og læring af hvordan du plejer at sætte dem. Plus EQ-områder.
+// ud fra en plan du selv skriver (altid i tidsrækkefølge), og læring af hvordan du plejer at flytte dem. Plus EQ-områder.
 
 import Foundation
 
@@ -125,9 +125,10 @@ enum SongStructure {
                 let b = merged[i].start
                 let lowLimit = merged[i - 1].start + 1
                 let highLimit = merged[i].end - 1
-                var best = b, bestScore = change(b)
+                var best = b, bestScore = change(b) * (b % 8 == 0 ? 1.1 : (b % 4 == 0 ? 1.05 : 1))
                 for c in max(lowLimit, b - 4)...max(max(lowLimit, b - 4), min(highLimit, b + 4)) {
-                    let sc = change(c)
+                    // Dansemusik skifter næsten altid på 4/8-takters grænser – de vinder ved tæt løb
+                    let sc = change(c) * (c % 8 == 0 ? 1.1 : (c % 4 == 0 ? 1.05 : 1))
                     if sc > bestScore + 1e-9 { best = c; bestScore = sc }
                 }
                 merged[i].start = best
@@ -227,33 +228,144 @@ struct CueRule: Codable, Equatable {
     }
 }
 
-enum CueRules {
-    static let rulesKey = "cue.rules"
-    static let learnKey = "cue.learn"
-    static let learnEnabledKey = "cue.learnEnabled"
+/// Et hot cue-forslag: hvilket bogstav, hvor, og hvilken del af sangen.
+struct CueSuggestion: Identifiable, Equatable {
+    var id: String              // fx "drop#2" – samme del i samme sang har altid samme id
+    var letter: String?         // nil = ingen ledig plads i rækkefølgen (dine egne cues ligger i vejen)
+    var at: Double              // sekunder
+    var bar: Int                // takt (1 = første takt)
+    var title: String           // "2. drop", "Første slag +16"
+    var target: CueRule.Target
+    var moved: Int              // takter du har flyttet forslaget
+    var learned: Int            // takter appen flytter det ud fra det lærte
+}
 
-    /// Standard: A første slag, B 16 takter inde, C 1. breakdown, D 1. buildup, E 1. drop,
-    /// F 2. breakdown, G 2. drop, H outro.
-    static let defaults: [String: CueRule] = [
-        "A": CueRule(target: .firstBeat),
-        "B": CueRule(target: .firstBeat, offsetBars: 16),
-        "C": CueRule(target: .breakdown),
-        "D": CueRule(target: .buildup),
-        "E": CueRule(target: .drop),
-        "F": CueRule(target: .breakdown, ordinal: 2),
-        "G": CueRule(target: .drop, ordinal: 2),
-        "H": CueRule(target: .outro),
+/// Planen: en tekst du selv skriver ("første slag, buildup, drop, breakdown, drop 2, outro"),
+/// som bliver til en liste af dele. Bogstaverne A–H gives altid i tidsrækkefølge.
+enum CuePlan {
+    static let standard = "første slag, første slag +16, buildup, drop, breakdown, buildup 2, drop 2, outro"
+
+    /// Ord der genkendes (dansk og engelsk). Rækkefølgen betyder noget: "breakdown" før "drop" osv.
+    static let words: [(CueRule.Target, [String])] = [
+        (.buildup, ["buildup", "build-up", "build up", "build", "opbygning", "riser", "oprul"]),
+        (.breakdown, ["breakdown", "break down", "break", "pause"]),
+        (.drop, ["drop"]),
+        (.intro, ["intro", "indledning"]),
+        (.outro, ["outro", "slutning", "afslutning"]),
+        (.main, ["groove", "main", "vers", "verse", "hook"]),
+        (.firstBeat, ["første slag", "første beat", "første takt", "first beat", "start", "begyndelse", "beat 1", "slag 1"]),
     ]
 
-    static var rules: [String: CueRule] {
-        get {
-            guard let d = UserDefaults.standard.data(forKey: rulesKey),
-                  let r = try? JSONDecoder().decode([String: CueRule].self, from: d) else { return defaults }
-            return defaults.merging(r) { _, new in new }
+    static let ordinalWords: [(Int, [String])] = [
+        (0, ["alle", "all", "hver", "hvert", "every", "each"]),
+        (-1, ["sidste", "last", "final"]),
+        (1, ["første", "first", "1."]),
+        (2, ["anden", "andet", "second", "2."]),
+        (3, ["tredje", "third", "3."]),
+        (4, ["fjerde", "fourth", "4."]),
+    ]
+
+    /// Teksten → dele i den rækkefølge du skrev dem, plus de ord appen ikke forstod.
+    static func parse(_ text: String) -> (parts: [CueRule], unknown: [String]) {
+        var s = " " + text.lowercased() + " "
+        for sep in ["→", "->", ";", "\n", "/", "|", " og ", " and ", " then ", " så "] {
+            s = s.replacingOccurrences(of: sep, with: ",")
         }
-        set {
-            if let d = try? JSONEncoder().encode(newValue) { UserDefaults.standard.set(d, forKey: rulesKey) }
+        s = s.replacingOccurrences(of: "−", with: "-")
+        var parts = [CueRule]()
+        var unknown = [String]()
+        for raw in s.split(separator: ",") {
+            var tok = raw.trimmingCharacters(in: .whitespaces)
+            guard !tok.isEmpty else { continue }
+            // Hvilken del? (første ord-match vinder)
+            var hit: CueRule.Target?
+            var matchedWord = ""
+            outer: for (t, list) in words {
+                for w in list where tok.contains(w) {
+                    hit = t; matchedWord = w
+                    break outer
+                }
+            }
+            guard let target = hit else { unknown.append(tok); continue }
+            let plural = tok.contains(matchedWord + "s") || tok.contains(matchedWord + "er")
+            tok = tok.replacingOccurrences(of: matchedWord, with: " ")
+
+            // Forskydning: "+16", "-4", "16 takter før", "8 bars after"
+            var offset = 0
+            if let m = firstMatch(#"([+-])\s*(\d+)"#, in: tok) {
+                let n = Int(m.groups[1]) ?? 0
+                offset = m.groups[0] == "-" ? -n : n
+                tok = m.removed
+            } else if let m = firstMatch(#"(\d+)\s*(takter|takt|bars|bar)\s*(før|inden|tidligere|before|efter|inde|ind|after|into|senere)?"#, in: tok) {
+                let n = Int(m.groups[0]) ?? 0
+                let neg = ["før", "inden", "tidligere", "before"].contains(m.groups[2])
+                offset = neg ? -n : n
+                tok = m.removed
+            }
+
+            // Hvilken af dem: "drop 2", "2. drop", "andet drop", "alle drops", "sidste breakdown"
+            var ordinal = plural ? 0 : 1
+            if target != .firstBeat {
+                var found = false
+                for (n, list) in ordinalWords {
+                    if list.contains(where: { w in tok.split(separator: " ").contains { $0 == w } || (w.hasSuffix(".") && tok.contains(w)) }) {
+                        ordinal = n; found = true
+                        break
+                    }
+                }
+                if !found, let m = firstMatch(#"(\d+)"#, in: tok), let n = Int(m.groups[0]), n >= 1, n <= 9 {
+                    ordinal = n
+                }
+            }
+            parts.append(CueRule(target: target, ordinal: target == .firstBeat ? 1 : ordinal, offsetBars: offset))
         }
+        return (parts, unknown)
+    }
+
+    /// Tekst for én del (bruges når du klikker en del ind i planen).
+    static func text(for r: CueRule) -> String {
+        var s: String
+        switch r.target {
+        case .none: return ""
+        case .firstBeat: s = "første slag"
+        default:
+            let name = r.target.title.lowercased()
+            switch r.ordinal {
+            case 0: s = "alle \(name)s"
+            case -1: s = "sidste \(name)"
+            case 1: s = name
+            default: s = "\(name) \(r.ordinal)"
+            }
+        }
+        if r.offsetBars != 0 { s += " \(r.offsetBars > 0 ? "+" : "-")\(abs(r.offsetBars))" }
+        return s
+    }
+
+    private struct Match { var groups: [String]; var removed: String }
+
+    private static func firstMatch(_ pattern: String, in s: String) -> Match? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
+        var groups = [String]()
+        for i in 1..<m.numberOfRanges {
+            if let r = Range(m.range(at: i), in: s) { groups.append(String(s[r])) } else { groups.append("") }
+        }
+        guard let all = Range(m.range, in: s) else { return nil }
+        var rest = s
+        rest.replaceSubrange(all, with: " ")
+        return Match(groups: groups, removed: rest)
+    }
+}
+
+enum CueRules {
+    static let planKey = "cue.plan"
+    static let offsetsKey = "cue.learnOffsets"
+    static let learnEnabledKey = "cue.learnEnabled"
+
+    /// Den plan du har skrevet (gemmes).
+    static var planText: String {
+        get { UserDefaults.standard.string(forKey: planKey) ?? CuePlan.standard }
+        set { UserDefaults.standard.set(newValue, forKey: planKey) }
     }
 
     static var learnEnabled: Bool {
@@ -261,26 +373,29 @@ enum CueRules {
         set { UserDefaults.standard.set(newValue, forKey: learnEnabledKey) }
     }
 
-    /// Hvad du har gjort før: [bogstav: [regel-nøgle: antal]]
-    static var learned: [String: [String: Int]] {
-        get { (UserDefaults.standard.dictionary(forKey: learnKey) as? [String: [String: Int]]) ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: learnKey) }
+    /// Hvor du flytter dine cues i forhold til sektionsstarten: [del: [takter: antal]]
+    static var learnedOffsets: [String: [String: Int]] {
+        get { (UserDefaults.standard.dictionary(forKey: offsetsKey) as? [String: [String: Int]]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: offsetsKey) }
     }
 
-    /// Den regel du selv bruger mest for et bogstav (mindst 3 gange og over halvdelen af gangene).
-    static func learnedRule(for letter: String) -> (rule: CueRule, count: Int)? {
-        guard learnEnabled, let counts = learned[letter], let best = counts.max(by: { $0.value < $1.value }) else { return nil }
+    /// Det du plejer: fx "drop → 4 takter før" (mindst 3 gange og over halvdelen af gangene).
+    static func learnedOffset(for target: CueRule.Target) -> (bars: Int, count: Int)? {
+        guard learnEnabled, let counts = learnedOffsets[target.rawValue],
+              let best = counts.max(by: { $0.value < $1.value }), let bars = Int(best.key) else { return nil }
         let total = counts.values.reduce(0, +)
-        guard best.value >= 3, Double(best.value) / Double(total) > 0.5, let r = CueRule(key: best.key) else { return nil }
-        return (r, best.value)
+        guard best.value >= 3, Double(best.value) / Double(total) > 0.5 else { return nil }
+        return (bars, best.value)
     }
 
-    /// Reglen der bruges til forslaget: det du har lært appen, ellers dine regler.
-    static func effectiveRule(for letter: String) -> CueRule {
-        learnedRule(for: letter)?.rule ?? rules[letter] ?? CueRule(target: .none)
+    static func learnOffset(_ target: CueRule.Target, bars: Int) {
+        guard learnEnabled, target.section != nil, abs(bars) <= 16 else { return }
+        var all = learnedOffsets
+        all[target.rawValue, default: [:]][String(bars), default: 0] += 1
+        learnedOffsets = all
     }
 
-    /// Hvilken regel beskriver bedst en cue du selv har sat? (nærmeste sektionsstart, ellers takter fra første slag)
+    /// Hvilken del beskriver bedst en cue du selv har sat? (nærmeste sektionsstart, ellers takter fra første slag)
     static func describe(_ t: Double, sections: [SongSection], bpm: Double, firstBeat: Double) -> CueRule? {
         guard bpm > 0 else { return nil }
         let barSec = 60 / bpm * 4
@@ -296,19 +411,80 @@ enum CueRules {
         return best?.0
     }
 
-    static func learn(letter: String, rule: CueRule) {
-        guard learnEnabled else { return }
-        var all = learned
-        all[letter, default: [:]][rule.key, default: 0] += 1
-        learned = all
-    }
+    /// Forslag A–H: delene fra planen findes i sangen, dobbelte fjernes, og bogstaverne gives i tidsrækkefølge
+    /// – også i forhold til de hot cues du allerede har sat (et forslag får aldrig et bogstav der bryder rækkefølgen).
+    static func suggestions(plan: [CueRule], sections: [SongSection], bpm: Double, firstBeat: Double, gridStart: Double,
+                            duration: Double, existing: [String: Double] = [:], moved: [String: Int] = [:],
+                            dismissed: Set<String> = []) -> [CueSuggestion] {
+        guard bpm > 0, duration > 0 else { return [] }
+        let barSec = 60 / bpm * 4
+        struct Cand { var s: CueSuggestion; var priority: Int }
+        var cands = [Cand]()
+        for (pi, part) in plan.enumerated() {
+            var hits = [(base: Double, title: String, id: String)]()
+            switch part.target {
+            case .none: continue
+            case .firstBeat:
+                let title = part.offsetBars == 0 ? "Første slag" : "Første slag \(part.offsetBars > 0 ? "+" : "−")\(abs(part.offsetBars))"
+                hits.append((firstBeat, title, "firstBeat\(part.offsetBars >= 0 ? "+" : "")\(part.offsetBars)"))
+            default:
+                guard let kind = part.target.section else { continue }
+                let all = sections.filter { $0.kind == kind }
+                let chosen: [SongSection]
+                switch part.ordinal {
+                case 0: chosen = all
+                case -1: chosen = all.last.map { [$0] } ?? []
+                default: chosen = all.filter { $0.ordinal == part.ordinal }
+                }
+                for sec in chosen {
+                    let name = all.count > 1 ? "\(sec.ordinal). \(kind.title.lowercased())" : kind.title
+                    hits.append((sec.start, name, "\(kind.rawValue)#\(sec.ordinal)\(part.offsetBars == 0 ? "" : "\(part.offsetBars > 0 ? "+" : "")\(part.offsetBars)")"))
+                }
+            }
+            for h in hits {
+                // Det lærte gælder kun sektioner, og kun når du ikke selv har skrevet en forskydning
+                let learned = (part.target.section != nil && part.offsetBars == 0) ? (learnedOffset(for: part.target)?.bars ?? 0) : 0
+                let m = moved[h.id] ?? 0
+                let bars = part.offsetBars + learned + m
+                var t = h.base + Double(bars) * barSec
+                if part.target.section != nil, t < firstBeat { t = firstBeat }
+                guard t >= 0, t < duration - barSec, !dismissed.contains(h.id) else { continue }
+                var title = h.title
+                if part.target.section != nil, part.offsetBars != 0 {
+                    title += " \(part.offsetBars > 0 ? "+" : "−")\(abs(part.offsetBars))"
+                }
+                let bar = Int(((t - gridStart) / barSec).rounded()) + 1
+                cands.append(Cand(s: CueSuggestion(id: h.id, letter: nil, at: t, bar: bar, title: title, target: part.target,
+                                                   moved: m, learned: learned), priority: pi))
+            }
+        }
+        // Samme sted to gange (fx "buildup" = "første slag +16"): den du skrev først vinder
+        let minGap = barSec * 1.5
+        var kept = [Cand]()
+        for c in cands.sorted(by: { ($0.priority, $0.s.at) < ($1.priority, $1.s.at) }) {
+            if kept.contains(where: { abs($0.s.at - c.s.at) < minGap || $0.s.id == c.s.id }) { continue }
+            if existing.values.contains(where: { abs($0 - c.s.at) < minGap }) { continue }
+            kept.append(c)
+        }
+        // Højst så mange som der er ledige bogstaver – de vigtigste (først i planen) beholdes
+        let free = HotCue.letters.filter { existing[$0] == nil }.count
+        if kept.count > free { kept = Array(kept.prefix(free)) }
 
-    /// Forslag A–H for en sang.
-    static func suggestions(sections: [SongSection], bpm: Double, firstBeat: Double, duration: Double) -> [String: Double] {
-        var out = [String: Double]()
-        for letter in HotCue.letters {
-            if let t = effectiveRule(for: letter).resolve(sections: sections, bpm: bpm, firstBeat: firstBeat, duration: duration) {
-                out[letter] = t
+        // Bogstaver i tidsrækkefølge, uden om dine egne cues
+        let letters = HotCue.letters
+        var out = kept.map(\.s).sorted { $0.at < $1.at }
+        var last = -1
+        for i in out.indices {
+            let at = out[i].at
+            var lower = last
+            var upper = letters.count
+            for (l, t) in existing {
+                guard let li = letters.firstIndex(of: l) else { continue }
+                if t <= at { lower = max(lower, li) } else { upper = min(upper, li) }
+            }
+            if let li = ((lower + 1)..<max(lower + 1, upper)).first(where: { existing[letters[$0]] == nil }) {
+                out[i].letter = letters[li]
+                last = li
             }
         }
         return out
