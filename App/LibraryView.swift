@@ -846,6 +846,19 @@ struct TrackListView: View {
                 app.tool = .findBetter
             })
         }
+        // Artwork: tag coveret fra en (gammel) sang og læg det på en anden (fx en WAV uden cover)
+        var art = [MMItem]()
+        if list.count == 1 {
+            art.append(.action("Kopiér artwork", icon: "doc.on.doc") {
+                library.copyArtwork(id)
+            })
+        }
+        let paste = library.pastableArtwork
+        art.append(.action(paste.map { "Indsæt artwork fra \($0.name)" } ?? "Indsæt artwork", icon: "doc.on.clipboard", enabled: paste != nil) {
+            library.pasteArtwork(to: list)
+        })
+        art.append(.action("Hent artwork fra en anden fil…", icon: "photo.badge.arrow.down") { library.pickArtworkFile(for: list) })
+        items.append(.submenu("Artwork", icon: "photo", art))
         items.append(.action("Analysér igen", icon: "waveform.path.ecg") { library.reanalyze(list) })
         items.append(.action("Ret lydstyrke til \(Int(LoudnessPrefs.target)) LUFS", icon: "dial.medium") { library.fixLoudness(list, force: true) })
         if list.contains(where: { library.index.track($0)?.originalBackup != nil }) {

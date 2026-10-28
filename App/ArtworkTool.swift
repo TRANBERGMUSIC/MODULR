@@ -122,7 +122,33 @@ final class ArtworkModel: ObservableObject {
         }
     }
 
+    /// Sangen coveret er hentet fra (gemmes i Artwork-biblioteket under dens navn, når du lægger det på).
+    var sourceSong: SongInfo?
+    var sourceRaw: Data?
+
     func setImage(_ url: URL) {
+        // En lydfil: hent kun dens cover
+        if ArtworkLibrary.audioExts.contains(url.pathExtension.lowercased()) {
+            Task {
+                let raw = await ArtworkLibrary.extract(from: url)
+                await MainActor.run {
+                    guard let raw, let data = ArtworkImage.cdjJPEG(data: raw), let img = NSImage(data: data) else {
+                        imageInfo = "\"\(url.lastPathComponent)\" har intet artwork"
+                        return
+                    }
+                    imageURL = url
+                    jpeg = data
+                    preview = img
+                    sourceRaw = raw
+                    sourceSong = ArtworkLibrary.song(for: url)
+                    let px = img.representations.first.map { "\($0.pixelsWide)×\($0.pixelsHigh)" } ?? ""
+                    imageInfo = "Hentet fra \(url.lastPathComponent) · \(px) – klar til CDJ"
+                }
+            }
+            return
+        }
+        sourceSong = nil
+        sourceRaw = nil
         guard let data = ArtworkImage.cdjJPEG(from: url), let img = NSImage(data: data) else {
             imageInfo = "Billedet kunne ikke læses"
             return
@@ -138,7 +164,15 @@ final class ArtworkModel: ObservableObject {
         guard let jpeg else { return }
         busy = true
         let targets = rows
+        let source = sourceSong, raw = sourceRaw ?? jpeg, from = imageURL?.lastPathComponent ?? "billede"
         DispatchQueue.global(qos: .userInitiated).async {
+            // Husk coveret under kildens og filernes navne – så bedre versioner senere får det automatisk
+            if let source { ArtworkLibrary.shared.add(raw, song: source, source: "Fra fil: \(from)") }
+            for r in targets {
+                if let song = ArtworkLibrary.song(for: r.url) {
+                    ArtworkLibrary.shared.add(raw, song: song, source: "Manuelt: \(from)", file: r.url)
+                }
+            }
             var updated = targets
             for i in updated.indices {
                 do {
@@ -230,7 +264,7 @@ struct ManualArtworkView: View {
                             Image(systemName: "photo")
                                 .font(.system(size: 40))
                                 .foregroundColor(.ember)
-                            Text("Træk et billede herind")
+                            Text("Træk et billede – eller en sang med cover – herind").multilineTextAlignment(.center)
                         }
                     }
                 }
@@ -242,7 +276,7 @@ struct ManualArtworkView: View {
                     }
                     return true
                 }
-                Button("Vælg billede…") { pickImage() }
+                Button("Vælg billede eller sang…") { pickImage() }
                 if let info = model.imageInfo {
                     Text(info).font(.caption).foregroundStyle(.secondary)
                 }
@@ -275,7 +309,7 @@ struct ManualArtworkView: View {
     func pickImage() {
         let p = NSOpenPanel()
         p.canChooseFiles = true
-        p.allowedContentTypes = [.image]
+        p.allowedContentTypes = [.image, .audio]
         if p.runModal() == .OK, let u = p.url { model.setImage(u) }
     }
 }

@@ -252,6 +252,39 @@ struct ArtworkLibraryView: View {
     @EnvironmentObject var library: ArtworkLibrary
     @State private var search = ""
     @State private var message: String?
+    @State private var autoEmbed = ArtworkPrefs.autoEmbed
+    @State private var targeted = false
+
+    /// Hent kun coveret fra lydfiler (gammel MP3, en anden version …) og gem det under sangens navn.
+    func pickSource() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true
+        p.allowsMultipleSelection = true
+        p.allowedContentTypes = [.audio]
+        p.prompt = "Hent artwork"
+        if p.runModal() == .OK { harvest(p.urls) }
+    }
+
+    func harvest(_ urls: [URL]) {
+        let files = urls.filter { ArtworkLibrary.audioExts.contains($0.pathExtension.lowercased()) }
+        guard !files.isEmpty else { message = "Træk lydfiler med cover herind"; return }
+        Task {
+            var saved = [ArtworkEntry](), missing = 0
+            for u in files {
+                guard let data = await ArtworkLibrary.extract(from: u), let song = ArtworkLibrary.song(for: u),
+                      let e = library.add(data, song: song, source: "Fra fil: \(u.lastPathComponent)", file: u) else { missing += 1; continue }
+                saved.append(e)
+            }
+            let all = await MainActor.run { LibraryStore.shared.index.tracks }
+            let more = LibraryStore.shared.fillMissing(using: saved, in: all)
+            await MainActor.run {
+                var m = "\(saved.count) cover\(saved.count == 1 ? "" : "s") gemt under sangens navn"
+                if missing > 0 { m += " · \(missing) uden cover" }
+                if more > 0 { m += " · lagt på \(more) sang\(more == 1 ? "" : "e") i biblioteket uden cover" }
+                message = m
+            }
+        }
+    }
 
     var filtered: [ArtworkEntry] {
         guard !search.isEmpty else { return library.entries }
@@ -266,17 +299,25 @@ struct ArtworkLibraryView: View {
                     .frame(width: 280)
                 Text("\(library.entries.count) covers").foregroundStyle(.secondary)
                 Spacer()
-                if let m = message { Text(m).foregroundStyle(.secondary) }
+                if let m = message { Text(m).foregroundStyle(.secondary).lineLimit(2) }
+                Toggle("Læg automatisk på filer uden cover", isOn: $autoEmbed)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: autoEmbed) { _, v in ArtworkPrefs.autoEmbed = v }
+                    .help("Kommer der en sang ind (fx en bedre WAV) uden cover, men med samme navn som et cover her, lægges det ind i filen")
+                Button("Hent artwork fra en fil…") { pickSource() }
+                    .buttonStyle(.ember)
+                    .help("Vælg en sang med cover – coveret gemmes her under sangens navn og lægges selv på andre versioner uden cover")
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 8)
+            Group {
             if library.entries.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 44))
                         .foregroundColor(.ember)
                     Text("Biblioteket er tomt").font(.title3)
-                    Text("Covers samles automatisk her, når du sætter sange ind i biblioteket.")
+                    Text("Covers samles automatisk her, når du sætter sange ind i biblioteket – eller træk en sang herind for kun at hente dens cover.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -290,6 +331,12 @@ struct ArtworkLibraryView: View {
                     .padding(24)
                 }
             }
+            }
+            .overlay {
+                if targeted { DropHint(text: "Slip for at hente coveret fra sangene").padding(16) }
+            }
+            .animation(Motion.hover, value: targeted)
+            .fileDrop(targeted: $targeted) { urls in harvest(urls) }
         }
     }
 }

@@ -389,8 +389,18 @@ final class LibraryStore: ObservableObject {
         }
         sem.wait()
         var art = box.value
-        if art == nil, let song = ArtworkLibrary.song(for: url), let e = ArtworkLibrary.shared.find(for: song) {
-            art = ArtworkLibrary.shared.imageData(e)
+        if art == nil, let song = ArtworkLibrary.song(for: url) ?? Self.songInfo(t), let e = ArtworkLibrary.shared.find(for: song),
+           let known = ArtworkLibrary.shared.imageData(e) {
+            art = known
+            // Filen mangler cover, men vi kender sangen (fx en bedre WAV af en sang du har hentet artwork fra):
+            // læg det ind i selve filen, så rekordbox og CDJ'en også viser det.
+            if ArtworkPrefs.autoEmbed, ArtworkLibrary.writableExts.contains(url.pathExtension.lowercased()),
+               let cdj = ArtworkImage.cdjJPEG(data: known),
+               (try? AudioTagger.setFrames([ID3.pictureFrame(jpeg: cdj)], on: url)) != nil {
+                ArtworkLibrary.shared.noteApplied(e, to: url)
+                let name = t.title
+                DispatchQueue.main.async { self.lastMessage = "Artwork lagt på \"\(name)\" automatisk (kendt fra \(e.displayName))" }
+            }
         }
         if let a = art, let jpeg = ArtworkImage.libraryJPEG(data: a) {
             let name = "\(t.id.uuidString).jpg"
