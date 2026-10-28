@@ -72,6 +72,13 @@ struct PlayerPanel: View {
                     .transition(.asymmetric(insertion: .scale(scale: 0.92).combined(with: .opacity), removal: .opacity))
             }
             .frame(width: 44, height: 44)
+            // Træk et billede (screenshot, foto) på coveret → sangens artwork, tilpasset til kvadrat
+            .dropDestination(for: URL.self) { urls, _ in
+                guard let t, LibraryStore.shared.index.track(t.id) != nil else { return false }
+                let rest = LibraryStore.shared.takeArtworkImages(urls, for: [t.id])
+                return rest.count < urls.count
+            }
+            .help("Træk et billede herover for at bruge det som artwork")
             ZStack(alignment: .leading) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t?.title ?? "Dobbeltklik på en sang for at afspille den")

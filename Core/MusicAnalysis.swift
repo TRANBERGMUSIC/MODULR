@@ -4,6 +4,7 @@
 
 import Foundation
 import AVFoundation
+import CoreMedia
 import Accelerate
 
 struct MusicAnalysisResult: Equatable {
@@ -26,20 +27,45 @@ enum MusicAnalyzer {
     // MARK: Dekodning
 
     /// Læser filen som mono og halverer samplefrekvensen (44,1/48 kHz → 22,05/24 kHz).
+    /// Tåler filer med fejl: en ødelagt/afkortet slutning (typisk MP3 uden korrekt længde) giver bare
+    /// det der kunne læses. Kan AVAudioFile slet ikke åbne filen (fx forkert endelse eller usædvanlig
+    /// header), prøves AVAssetReader, som forstår flere varianter.
     static func decodeMono(url: URL) throws -> (samples: [Float], sampleRate: Double) {
+        do {
+            let r = try decodeWithAudioFile(url: url)
+            // Ingen eller næsten ingen lyd læst (fx et header-problem midt i filen) → prøv den anden vej
+            if r.samples.count > Int(r.sampleRate * 2) { return r }
+            if let alt = try? decodeWithAssetReader(url: url), alt.samples.count > r.samples.count { return alt }
+            return r
+        } catch {
+            if let alt = try? decodeWithAssetReader(url: url), alt.samples.count > 0 { return alt }
+            throw error
+        }
+    }
+
+    private static func decodeWithAudioFile(url: URL) throws -> (samples: [Float], sampleRate: Double) {
         let file = try AVAudioFile(forReading: url)
         let format = file.processingFormat
         let channels = Int(format.channelCount)
         let srcRate = format.sampleRate
         let factor = max(1, Int((srcRate / 22050).rounded()))
         let chunk: AVAudioFrameCount = 65536
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk) else { throw AnalyzerError.unreadable }
+        guard channels > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk) else { throw AnalyzerError.unreadable }
         var out = [Float]()
         out.reserveCapacity(Int(file.length) / factor + 1)
         var acc: Float = 0
         var accN = 0
+        var failures = 0
         while file.framePosition < file.length {
-            try file.read(into: buffer, frameCount: chunk)
+            do {
+                try file.read(into: buffer, frameCount: chunk)
+            } catch {
+                // Et ødelagt stykke: spring det over (højst nogle få gange), ellers stop med det vi har
+                failures += 1
+                if failures > 3 || out.isEmpty && failures > 1 { break }
+                file.framePosition = min(file.length, file.framePosition + AVAudioFramePosition(chunk))
+                continue
+            }
             let n = Int(buffer.frameLength)
             if n == 0 { break }
             guard let data = buffer.floatChannelData else { break }
@@ -56,8 +82,52 @@ enum MusicAnalyzer {
                 }
             }
         }
+        if out.isEmpty { throw AnalyzerError.unreadable }
         return (out, srcRate / Double(factor))
     }
+
+    /// Reserve: AVAssetReader afkoder til mono 22,05 kHz float.
+    private static func decodeWithAssetReader(url: URL) throws -> (samples: [Float], sampleRate: Double) {
+        let asset = AVURLAsset(url: url)
+        let sem = DispatchSemaphore(value: 0)
+        let box = TrackBox()
+        Task.detached {
+            box.track = try? await asset.loadTracks(withMediaType: .audio).first
+            sem.signal()
+        }
+        sem.wait()
+        guard let track = box.track else { throw AnalyzerError.unreadable }
+        let reader = try AVAssetReader(asset: asset)
+        let rate = 22050.0
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: rate,
+        ]
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { throw AnalyzerError.unreadable }
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? AnalyzerError.unreadable }
+        var out = [Float]()
+        while let sb = output.copyNextSampleBuffer() {
+            guard let bb = CMSampleBufferGetDataBuffer(sb) else { continue }
+            let len = CMBlockBufferGetDataLength(bb)
+            var chunk = [Float](repeating: 0, count: len / MemoryLayout<Float>.size)
+            chunk.withUnsafeMutableBytes { p in
+                _ = CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: len, destination: p.baseAddress!)
+            }
+            out.append(contentsOf: chunk)
+        }
+        if out.isEmpty { throw reader.error ?? AnalyzerError.unreadable }
+        return (out, rate)
+    }
+
+    private final class TrackBox: @unchecked Sendable { var track: AVAssetTrack? }
 
     // MARK: FFT
 

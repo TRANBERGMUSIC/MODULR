@@ -60,6 +60,14 @@ final class LibraryStore: ObservableObject {
         for i in data.tracks.indices where (data.tracks[i].waveVersion ?? 0) < LibTrack.currentWaveVersion {
             data.tracks[i].analyzed = false
         }
+        // Sange der fik fejl eller ingen waveform: prøv igen én gang med den mere tålmodige afkodning (1.23.4)
+        if !UserDefaults.standard.bool(forKey: "analysis.retry.v2") {
+            UserDefaults.standard.set(true, forKey: "analysis.retry.v2")
+            for i in data.tracks.indices where data.tracks[i].analysisError != nil || !data.tracks[i].hasWave {
+                data.tracks[i].analyzed = false
+                data.tracks[i].analysisError = nil
+            }
+        }
         index = data
         for t in data.tracks where !t.analyzed { enqueueAnalysis(t.id) }
         // Sange analyseret før lydstyrke-målingen kom med: mål dem nu
@@ -347,13 +355,16 @@ final class LibraryStore: ObservableObject {
             return
         }
         do {
-            let (report, _) = try Analyzer.quality(url: url)
-            t.codec = report.format.codec
-            t.statedKbps = report.format.nominalKbps
-            t.tierKbps = report.tierKbps
-            t.qualityLabel = report.label
-            t.sampleRate = report.format.sampleRate
-            t.bitDepth = report.format.bitDepth
+            // Kvalitetstjekket må ikke forhindre waveform og BPM, hvis det fejler på en usædvanlig fil
+            if let q = try? Analyzer.quality(url: url) {
+                let report = q.0
+                t.codec = report.format.codec
+                t.statedKbps = report.format.nominalKbps
+                t.tierKbps = report.tierKbps
+                t.qualityLabel = report.label
+                t.sampleRate = report.format.sampleRate
+                t.bitDepth = report.format.bitDepth
+            }
             let attrs = try? FileManager.default.attributesOfItem(atPath: t.path)
             t.fileSize = (attrs?[.size] as? NSNumber)?.int64Value
 

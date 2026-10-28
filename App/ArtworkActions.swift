@@ -121,11 +121,14 @@ extension LibraryStore {
 
     /// Lægger coveret på sangene: i MODULR, ind i filen (WAV/AIFF/MP3) og i Artwork-biblioteket under sangens navn
     /// og kildens navn. Bagefter får andre sange i biblioteket uden cover, der er samme sang, det også.
-    func setArtwork(_ data: Data, sourceSong: SongInfo?, sourceName: String, on ids: [UUID]) {
+    func setArtwork(_ input: Data, sourceSong: SongInfo?, sourceName: String, on ids: [UUID]) {
         let targets = ids.compactMap { index.track($0) }
         guard !targets.isEmpty else { return }
         let all = index.tracks
         DispatchQueue.global(qos: .userInitiated).async { [self] in
+            // Et screenshot/foto i forkert format bliver til et kvadratisk cover, der passer
+            let fitted = ArtworkImage.fitSquare(data: input)
+            let data = fitted?.data ?? input
             var written = 0, onlyApp = 0, failed = 0
             var entries = [ArtworkEntry]()
             if let s = sourceSong, let e = ArtworkLibrary.shared.add(data, song: s, source: "Fra \(sourceName)") { entries.append(e) }
@@ -142,6 +145,7 @@ extension LibraryStore {
             }
             let more = fillMissing(using: entries, in: all, except: Set(ids))
             var parts = ["Artwork fra \(sourceName) lagt på \(written + onlyApp) sang\(written + onlyApp == 1 ? "" : "e")"]
+            if fitted?.changed == true { parts.append("tilpasset til kvadrat") }
             if onlyApp > 0 { parts.append("\(onlyApp) kun i MODULR (FLAC/M4A kan ikke få cover i filen)") }
             if failed > 0 { parts.append("\(failed) fejlede") }
             if more > 0 { parts.append("+ \(more) andre versioner uden cover fik det også") }
@@ -185,5 +189,19 @@ extension LibraryStore {
             }
         }
         return n
+    }
+}
+
+extension LibraryStore {
+    /// Billeder trukket ind på en sang (fra Finder, skrivebordet, en browser …) bliver sangens artwork.
+    static let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tif", "tiff", "bmp"]
+
+    /// Deler et træk op: billeder → artwork på `ids`, resten importeres som normalt. Returnerer de øvrige filer.
+    func takeArtworkImages(_ urls: [URL], for ids: [UUID]) -> [URL] {
+        let images = urls.filter { Self.imageExts.contains($0.pathExtension.lowercased()) }
+        if let img = images.first, !ids.isEmpty, let data = try? Data(contentsOf: img) {
+            setArtwork(data, sourceSong: nil, sourceName: img.lastPathComponent, on: ids)
+        }
+        return urls.filter { !Self.imageExts.contains($0.pathExtension.lowercased()) }
     }
 }

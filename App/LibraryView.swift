@@ -767,7 +767,10 @@ struct TrackListView: View {
                         TableRow(t)
                             .draggable(dragPayload(for: t))
                             .dropDestination(for: URL.self) { urls in
-                                library.importDropped(urls.filter(\.isFileURL), into: currentPlaylist)
+                                // Et billede på en sang = sangens artwork (på alle valgte, hvis sangen er valgt)
+                                let ids: [UUID] = ui.tableSelection.contains(t.id) ? Array(ui.tableSelection) : [t.id]
+                                let rest = library.takeArtworkImages(urls.filter(\.isFileURL), for: ids)
+                                if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
                             }
                     }
                 }

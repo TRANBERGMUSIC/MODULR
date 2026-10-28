@@ -1,0 +1,7 @@
+# Fejlsøgning og byggefiler (skal ikke med i git)
+build.log
+hang.txt
+exception.txt
+wavefejl.txt
+*.log
+.DS_Store
