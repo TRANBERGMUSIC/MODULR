@@ -294,37 +294,51 @@ struct SideRow: View {
     var count: Int?
     let active: Bool
     var italic = false
+    /// Noget trækkes hen over rækken lige nu – den lyser op, så man kan se hvor sangene lander.
+    var dropTarget = false
+    var dropLabel = "Læg i"
     let action: () -> Void
     @State private var hover = false
-    @State private var targeted = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                Image(systemName: icon)
+                Image(systemName: dropTarget ? "plus.circle.fill" : icon)
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 18)
-                    .foregroundStyle(active ? AnyShapeStyle(Color.emberGradient) : AnyShapeStyle(Color.mist.opacity(0.55)))
+                    .foregroundStyle(active || dropTarget ? AnyShapeStyle(Color.emberGradient) : AnyShapeStyle(Color.mist.opacity(0.55)))
+                    .contentTransition(.symbolEffect(.replace))
                 Text(title)
-                    .font(.system(size: 13, weight: active ? .semibold : .regular))
+                    .font(.system(size: 13, weight: active || dropTarget ? .semibold : .regular))
                     .italic(italic)
-                    .foregroundColor(active ? .mist : .mist.opacity(0.8))
+                    .foregroundColor(active || dropTarget ? .mist : .mist.opacity(0.8))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if let count {
+                if dropTarget {
+                    Text(dropLabel)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.void)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.ember))
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else if let count {
                     Text("\(count)").font(.system(size: 11)).monospacedDigit().foregroundColor(.mist.opacity(0.4))
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(active ? Color.ember.opacity(0.14) : Color.white.opacity(hover ? 0.05 : 0)))
+                .fill(dropTarget ? Color.ember.opacity(0.26) : (active ? Color.ember.opacity(0.14) : Color.white.opacity(hover ? 0.05 : 0))))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.ember.opacity(dropTarget ? 1 : 0), lineWidth: 1.5))
+            .scaleEffect(dropTarget ? 1.02 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .animation(Motion.hover, value: hover)
         .animation(Motion.snappy, value: active)
+        .animation(Motion.snappy, value: dropTarget)
     }
 }
 
@@ -366,7 +380,8 @@ struct NodeRow: View {
                     Color.clear.frame(width: 18)
                 }
                 SideRow(icon: node.isFolder ? "folder.fill" : "music.note.list", title: node.name,
-                        count: node.isFolder ? nil : node.trackIDs.count, active: ui.selection == .node(node.id)) {
+                        count: node.isFolder ? nil : node.trackIDs.count, active: ui.selection == .node(node.id),
+                        dropTarget: targeted, dropLabel: node.isFolder ? "Ind i mappen" : "Læg i") {
                     ui.selection = .node(node.id)
                 }
                 if node.isFolder {
@@ -380,24 +395,34 @@ struct NodeRow: View {
             }
             .padding(.leading, CGFloat(depth) * 14)
             .onHover { hover = $0 }
-            .background(RoundedRectangle(cornerRadius: 8).stroke(targeted ? Color.ember : Color.clear, lineWidth: 1.5))
             .draggable("node:\(node.id.uuidString)")
             .fileDrop(targeted: $targeted, strings: { items in
                 for s in items {
                     if s.hasPrefix("node:"), let id = UUID(uuidString: String(s.dropFirst(5))), node.isFolder {
                         library.move(id, under: node.id)
-                    } else if s.hasPrefix("tracks:"), !node.isFolder {
-                        let ids = s.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) }
-                        library.add(ids, to: node.id)
-                    } else if s.hasPrefix("usbtracks:"), !node.isFolder {
-                        library.importFromUsb(UsbDragItem.files(s), into: node.id)
                     }
                 }
+                let ids = DropSupport.trackIDs(items)
+                if !ids.isEmpty, !node.isFolder {
+                    library.add(ids, to: node.id)
+                    let new = ids.filter { !node.trackIDs.contains($0) }.count
+                    library.lastMessage = new > 0 ? "\(new) sang\(new == 1 ? "" : "e") lagt i \(node.name)" + (new < ids.count ? " (\(ids.count - new) lå der i forvejen)" : "")
+                                                  : "Sangene ligger allerede i \(node.name)"
+                }
+                let usbFiles = items.filter { $0.hasPrefix("usbtracks:") }.flatMap { UsbDragItem.files($0) }
+                if !usbFiles.isEmpty, !node.isFolder { library.importFromUsb(usbFiles, into: node.id) }
             }, files: { urls in
                 // Filer fra skrivebordet, Downloads osv.: ind i playlisten (på en mappe: bare ind i biblioteket)
                 library.importDropped(urls, into: node.isFolder ? nil : node.id)
             })
             .modMenu(title: node.name, subtitle: node.isFolder ? "Mappe" : "\(node.trackIDs.count) sange") { nodeMenu() }
+            .onChange(of: targeted) { _, on in
+                // Hold et træk over en lukket mappe et øjeblik → den folder sig ud (som i Finder)
+                guard on, node.isFolder, !open else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if targeted { withAnimation(Motion.snappy) { open = true } }
+                }
+            }
             if node.isFolder && open {
                 NodeTree(parent: node.id, depth: depth + 1, prompt: prompt)
             }
@@ -1143,6 +1168,7 @@ struct UsbTree: View {
     let prompt: (String, String, @escaping (String) -> Void) -> Void
     @State private var open = true
     @State private var hover = false
+    @State private var dropKey: String?                   // ny playliste der trækkes hen over lige nu
 
     var body: some View {
         let c = usb.contents[drive.id]
@@ -1181,13 +1207,15 @@ struct UsbTree: View {
                 }
                 ForEach(pending.filter { $0.kind == .playlist && $0.parent == .root }) { p in
                     SideRow(icon: "music.note.list", title: p.name + "  •ny", count: p.tracks.count,
-                            active: ui.selection == .usbPending(drive.id, p.key), italic: true) {
+                            active: ui.selection == .usbPending(drive.id, p.key), italic: true, dropTarget: dropKey == p.key) {
                         ui.selection = .usbPending(drive.id, p.key)
                     }
                     .padding(.leading, 14)
                     .dropDestination(for: String.self) { items, _ in
                         usb.add(ids(items), to: drive, newKey: p.key)
                         return true
+                    } isTargeted: { on in
+                        if on { dropKey = p.key } else if dropKey == p.key { dropKey = nil }
                     }
                 }
                 ForEach(pending.filter { $0.kind == .folder && $0.parent == .root }) { f in
@@ -1198,13 +1226,15 @@ struct UsbTree: View {
                         }
                     ForEach(pending.filter { $0.kind == .playlist && $0.parent == .new(f.key) }) { p in
                         SideRow(icon: "music.note.list", title: p.name + "  •ny", count: p.tracks.count,
-                                active: ui.selection == .usbPending(drive.id, p.key), italic: true) {
+                                active: ui.selection == .usbPending(drive.id, p.key), italic: true, dropTarget: dropKey == p.key) {
                             ui.selection = .usbPending(drive.id, p.key)
                         }
                         .padding(.leading, 28)
                         .dropDestination(for: String.self) { items, _ in
                             usb.add(ids(items), to: drive, newKey: p.key)
                             return true
+                        } isTargeted: { on in
+                            if on { dropKey = p.key } else if dropKey == p.key { dropKey = nil }
                         }
                     }
                 }
@@ -1215,7 +1245,7 @@ struct UsbTree: View {
     }
 
     func ids(_ items: [String]) -> [UUID] {
-        items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
+        DropSupport.trackIDs(items)
     }
 }
 
@@ -1228,6 +1258,7 @@ struct UsbNodeTree: View {
     let prompt: (String, String, @escaping (String) -> Void) -> Void
     @State private var openFolders: Set<Int> = []        // mapper er lukkede, til du åbner dem
     @State private var hovered: Int?
+    @State private var dropNode: Int?                     // rækken der trækkes hen over lige nu
 
     init(drive: UsbDrive, parent: Int, depth: Int, prompt: @escaping (String, String, @escaping (String) -> Void) -> Void) {
         self.drive = drive
@@ -1276,7 +1307,8 @@ struct UsbNodeTree: View {
                     Color.clear.frame(width: 18)
                 }
                 SideRow(icon: n.folder ? "folder" : "music.note.list", title: n.name + (added > 0 ? "  +\(added)" : ""),
-                        count: n.folder ? nil : n.tracks.count, active: ui.selection == .usb(drive.id, n.id)) {
+                        count: n.folder ? nil : n.tracks.count, active: ui.selection == .usb(drive.id, n.id),
+                        dropTarget: dropNode == n.id && !n.folder) {
                     if n.folder {
                         if openFolders.contains(n.id) { openFolders.remove(n.id) } else { openFolders.insert(n.id) }
                     }
@@ -1295,7 +1327,7 @@ struct UsbNodeTree: View {
             }
             .dropDestination(for: String.self) { items, _ in
                 guard !n.folder else { return false }
-                let ids = items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
+                let ids = DropSupport.trackIDs(items)
                 if !ids.isEmpty { usb.add(ids, to: drive, existing: n.id) }
                 // Sange fra USB'en selv → læg dem i denne playliste (som at trække i rekordbox)
                 var usbIDs = [Int]()
@@ -1306,6 +1338,14 @@ struct UsbNodeTree: View {
                 }
                 if !usbIDs.isEmpty { usb.addExisting(drive, playlist: n.id, tracks: Array(Set(usbIDs))) }
                 return true
+            } isTargeted: { on in
+                if on { dropNode = n.id } else if dropNode == n.id { dropNode = nil }
+                // En lukket mappe folder sig ud, når man holder et træk over den
+                if on, n.folder, !openFolders.contains(n.id) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        if dropNode == n.id { _ = withAnimation(Motion.snappy) { openFolders.insert(n.id) } }
+                    }
+                }
             }
             .modMenu(title: n.name) { usbFolderMenu(n) }
             if n.folder && openFolders.contains(n.id) {
@@ -1317,7 +1357,7 @@ struct UsbNodeTree: View {
                     }
                     .padding(.leading, CGFloat(depth + 1) * 14)
                     .dropDestination(for: String.self) { items, _ in
-                        let ids = items.filter { $0.hasPrefix("tracks:") }.flatMap { $0.dropFirst(7).split(separator: ",").compactMap { UUID(uuidString: String($0)) } }
+                        let ids = DropSupport.trackIDs(items)
                         usb.add(ids, to: drive, newKey: p.key)
                         return true
                     }

@@ -10,6 +10,19 @@ enum DropSupport {
 
     static let types: [UTType] = [.fileURL, .utf8PlainText, .plainText, .text]
 
+    /// Sang-id'erne i et træk. Trækker man flere valgte sange, sender hver række HELE udvalget –
+    /// 5 valgte = 5 × 5 id'er – så de skal tælles én gang (ellers kommer 25 sange med i stedet for 5).
+    static func trackIDs(_ items: [String]) -> [UUID] {
+        var seen = Set<UUID>()
+        var out = [UUID]()
+        for s in items where s.hasPrefix("tracks:") {
+            for part in s.dropFirst(7).split(separator: ",") {
+                if let id = UUID(uuidString: String(part)), seen.insert(id).inserted { out.append(id) }
+            }
+        }
+        return out
+    }
+
     /// Læser alle træk: interne tekster og fil-URL'er. Kaldes på hovedtråden når alt er læst.
     static func read(_ providers: [NSItemProvider], done: @escaping (_ strings: [String], _ files: [URL]) -> Void) {
         let group = DispatchGroup()

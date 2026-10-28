@@ -335,7 +335,9 @@ final class UsbStore: ObservableObject {
     @discardableResult
     func newPlaylist(_ d: UsbDrive, name: String, parent: UsbPending.Parent, tracks: [UUID] = []) -> String {
         let key = "p-\(UUID().uuidString.prefix(8))"
-        pending[d.id, default: []].append(UsbPending(key: key, kind: .playlist, name: name, parent: parent, tracks: tracks))
+        var seen = Set<UUID>()
+        let unique = tracks.filter { seen.insert($0).inserted }
+        pending[d.id, default: []].append(UsbPending(key: key, kind: .playlist, name: name, parent: parent, tracks: unique))
         return key
     }
 
@@ -348,7 +350,10 @@ final class UsbStore: ObservableObject {
             if let i = list.firstIndex(where: { $0.kind == .addTo(pid) }) {
                 for t in tracks where !list[i].tracks.contains(t) { list[i].tracks.append(t) }
             } else {
-                list.append(UsbPending(key: "a-\(pid)", kind: .addTo(pid), name: "", parent: .root, tracks: tracks))
+                // Kun én gang pr. sang
+                var seen = Set<UUID>()
+                let unique = tracks.filter { seen.insert($0).inserted }
+                list.append(UsbPending(key: "a-\(pid)", kind: .addTo(pid), name: "", parent: .root, tracks: unique))
             }
         }
         pending[d.id] = list
