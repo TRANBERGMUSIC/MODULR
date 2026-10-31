@@ -330,6 +330,36 @@ final class UsbStore: ObservableObject {
 
     func newFolder(_ d: UsbDrive, name: String, parent: UsbPending.Parent) {
         pending[d.id, default: []].append(UsbPending(key: "f-\(UUID().uuidString.prefix(8))", kind: .folder, name: name, parent: parent, tracks: []))
+        scheduleWrite(d)
+    }
+
+    // MARK: Skriv automatisk (så snart du trækker sange over – ingen "Skriv til USB"-knap)
+
+    static let autoWriteKey = "usb.autoWrite"
+    var autoWrite: Bool {
+        get { UserDefaults.standard.object(forKey: Self.autoWriteKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.autoWriteKey) }
+    }
+    private var autoTimers: [String: DispatchWorkItem] = [:]
+    private var rerun: Set<String> = []
+
+    /// Skriver de ventende ændringer kort efter (så flere træk lige efter hinanden bliver til én skrivning).
+    func scheduleWrite(_ d: UsbDrive) {
+        guard autoWrite else { return }
+        autoTimers[d.id]?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.writing.contains(d.id) || self.editing.contains(d.id) { self.rerun.insert(d.id); return }
+            self.commit(d, library: LibraryStore.shared)
+        }
+        autoTimers[d.id] = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: w)
+    }
+
+    /// Kom der flere ændringer, mens vi skrev? Så skriv dem nu.
+    private func runAgainIfNeeded(_ d: UsbDrive) {
+        // Kun hvis der kom nye ændringer undervejs (ellers ville en fejl få den til at prøve igen og igen)
+        if rerun.remove(d.id) != nil { scheduleWrite(d) }
     }
 
     @discardableResult
@@ -338,6 +368,7 @@ final class UsbStore: ObservableObject {
         var seen = Set<UUID>()
         let unique = tracks.filter { seen.insert($0).inserted }
         pending[d.id, default: []].append(UsbPending(key: key, kind: .playlist, name: name, parent: parent, tracks: unique))
+        scheduleWrite(d)
         return key
     }
 
@@ -357,6 +388,7 @@ final class UsbStore: ObservableObject {
             }
         }
         pending[d.id] = list
+        scheduleWrite(d)
     }
 
     func discard(_ d: UsbDrive) { pending[d.id] = [] }
@@ -375,9 +407,18 @@ final class UsbStore: ObservableObject {
             try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tmp) }
             let idx = library.snapshot()
+            var missing = [String]()
+            var notes = [String]()
             func tracks(_ ids: [UUID]) -> [[String: Any]] {
-                ids.compactMap { idx.track($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
-                    .map { library.usbTrack($0, tempDir: tmp) }
+                var out = [[String: Any]]()
+                for t in ids.compactMap({ idx.track($0) }) {
+                    // Filen er flyttet eller slettet (fx fra Overførsler) – sig det i stedet for at springe den stille over
+                    guard FileManager.default.fileExists(atPath: t.path) else { missing.append(t.title); continue }
+                    let d = library.usbTrack(t, tempDir: tmp)
+                    if let n = d["note"] as? String { notes.append(n) }
+                    out.append(d)
+                }
+                return out
             }
             func parent(_ p: UsbPending.Parent) -> Any {
                 switch p {
@@ -402,8 +443,12 @@ final class UsbStore: ObservableObject {
                 let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 if obj?["ok"] as? Bool == true {
                     let n = (obj?["log"] as? [Any])?.count ?? 0
-                    text = "✅ \(d.name) er opdateret – \(n) sange kopieret. Backup af den gamle database ligger i PIONEER/MODULR-backup-…"
-                    DispatchQueue.main.async { self.pending[d.id] = [] }
+                    var t = "✅ \(d.name) er opdateret – \(n) sang\(n == 1 ? "" : "e") lagt på."
+                    if !missing.isEmpty { t += " ⚠︎ Kunne ikke finde \(missing.count): \(missing.prefix(3).joined(separator: ", "))\(missing.count > 3 ? " …" : "") (filen er flyttet eller slettet)." }
+                    if !notes.isEmpty { t += " " + notes.prefix(3).joined(separator: " · ") + (notes.count > 3 ? " …" : "") }
+                    text = t
+                    let keys = (obj?["keys"] as? [String: Int]) ?? [:]
+                    DispatchQueue.main.async { self.removeWritten(ops, from: d, keys: keys) }
                 } else {
                     text = "⛔️ USB'en blev ikke ændret: \(obj?["error"] as? String ?? String(data: data, encoding: .utf8) ?? "ukendt fejl")"
                 }
@@ -414,8 +459,36 @@ final class UsbStore: ObservableObject {
                 self.writing.remove(d.id)
                 self.message = text
                 self.load(d)
+                self.runAgainIfNeeded(d)
             }
         }
+    }
+
+    /// Fjern kun det der faktisk blev skrevet – det du trak over, MENS vi skrev, bliver liggende og skrives bagefter.
+    private func removeWritten(_ written: [UsbPending], from d: UsbDrive, keys: [String: Int]) {
+        var cur = pending[d.id] ?? []
+        for w in written {
+            guard let i = cur.firstIndex(where: { $0.key == w.key }) else { continue }
+            let left = cur[i].tracks.filter { !w.tracks.contains($0) }
+            if left.isEmpty {
+                cur.remove(at: i)
+            } else if w.kind == .playlist, let id = keys[w.key] {
+                // Den nye playliste findes nu på stikket – resten lægges i den
+                cur.remove(at: i)
+                if let j = cur.firstIndex(where: { $0.kind == .addTo(id) }) {
+                    for t in left where !cur[j].tracks.contains(t) { cur[j].tracks.append(t) }
+                } else {
+                    cur.append(UsbPending(key: "a-\(id)", kind: .addTo(id), name: "", parent: .root, tracks: left))
+                }
+            } else {
+                cur[i].tracks = left
+            }
+        }
+        // Nye mapper/playlister der nu er skrevet: henvisninger til dem peger nu på deres rigtige id
+        for i in cur.indices {
+            if case .new(let k) = cur[i].parent, let id = keys[k] { cur[i].parent = .existing(id) }
+        }
+        pending[d.id] = cur
     }
 
     // MARK: Ret i det der allerede ligger på USB'en (udføres med det samme – med backup og kontrol)
@@ -446,6 +519,7 @@ final class UsbStore: ObservableObject {
                 self.editing.remove(d.id)
                 self.message = result
                 self.load(d)
+                self.runAgainIfNeeded(d)
             }
         }
     }
@@ -558,8 +632,36 @@ final class UsbStore: ObservableObject {
                 self.writing.remove(d.id)
                 self.message = text
                 self.load(d)
+                self.runAgainIfNeeded(d)
             }
         }
+    }
+
+    /// Fjern kun det der faktisk blev skrevet – det du trak over, MENS vi skrev, bliver liggende og skrives bagefter.
+    private func removeWritten(_ written: [UsbPending], from d: UsbDrive, keys: [String: Int]) {
+        var cur = pending[d.id] ?? []
+        for w in written {
+            guard let i = cur.firstIndex(where: { $0.key == w.key }) else { continue }
+            let left = cur[i].tracks.filter { !w.tracks.contains($0) }
+            if left.isEmpty {
+                cur.remove(at: i)
+            } else if w.kind == .playlist, let id = keys[w.key] {
+                // Den nye playliste findes nu på stikket – resten lægges i den
+                cur.remove(at: i)
+                if let j = cur.firstIndex(where: { $0.kind == .addTo(id) }) {
+                    for t in left where !cur[j].tracks.contains(t) { cur[j].tracks.append(t) }
+                } else {
+                    cur.append(UsbPending(key: "a-\(id)", kind: .addTo(id), name: "", parent: .root, tracks: left))
+                }
+            } else {
+                cur[i].tracks = left
+            }
+        }
+        // Nye mapper/playlister der nu er skrevet: henvisninger til dem peger nu på deres rigtige id
+        for i in cur.indices {
+            if case .new(let k) = cur[i].parent, let id = keys[k] { cur[i].parent = .existing(id) }
+        }
+        pending[d.id] = cur
     }
 
     func eject(_ d: UsbDrive) {

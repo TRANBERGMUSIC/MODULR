@@ -1037,7 +1037,10 @@ final class LibraryStore: ObservableObject {
     /// Bygger en sang til USB-skriveren: lydfil, data, covers (80 og 240 px) og waveform-bånd.
     func usbTrack(_ t: LibTrack, tempDir: URL) -> [String: Any] {
         var d = [String: Any]()
-        d["source"] = t.path
+        // Den fil CDJ'en kan spille: originalen, eller en kopi med rigtig endelse / lavet om til 24-bit WAV
+        let compat = UsbCompat.prepare(t, tempDir: tempDir)
+        d["source"] = compat.path
+        if let note = compat.note { d["note"] = "\(t.title): \(note)" }
         d["title"] = t.title
         d["artist"] = t.artist
         d["album"] = t.album
@@ -1046,9 +1049,9 @@ final class LibraryStore: ObservableObject {
         d["bpm"] = t.bpm ?? 0
         d["duration"] = t.duration ?? 0
         d["year"] = t.year ?? 0
-        d["sample_rate"] = Int(t.sampleRate ?? 44100)
-        d["bitrate"] = t.statedKbps ?? 0
-        d["depth"] = t.bitDepth ?? 16
+        d["sample_rate"] = compat.sampleRate ?? Int(t.sampleRate ?? 44100)
+        d["bitrate"] = compat.depth != nil ? 0 : (t.statedKbps ?? 0)
+        d["depth"] = compat.depth ?? min(24, t.bitDepth ?? 16)
         var commentParts = [String]()
         if let k = t.key { commentParts.append(k.camelot) }
         if let e = t.energy { commentParts.append("Energy \(e)") }

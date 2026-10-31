@@ -1474,11 +1474,13 @@ struct UsbHeader: View {
                 Text(title.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundColor(.mist)
                 Spacer()
                 if usb.writing.contains(drive.id) { ProgressView().controlSize(.small) }
-                if !pending.isEmpty {
+                if usb.writing.contains(drive.id) {
+                    Text("Skriver til USB'en …").font(.system(size: 12)).foregroundColor(.mist.opacity(0.7))
+                } else if !pending.isEmpty {
+                    // Skrives normalt af sig selv – knappen er der, hvis en skrivning fejlede
                     Button("Fortryd") { usb.discard(drive) }
-                    Button("Skriv til USB (\(pending.count) ændring\(pending.count == 1 ? "" : "er"))") { usb.commit(drive, library: library) }
+                    Button("Prøv igen (\(pending.count))") { usb.commit(drive, library: library) }
                         .buttonStyle(.ember)
-                        .disabled(usb.writing.contains(drive.id))
                 }
                 Button("My Settings") { showSettings = true }
                 Button("Skub ud") { usb.ejectSafely(drive) }.disabled(usb.writing.contains(drive.id))
@@ -1525,7 +1527,7 @@ struct UsbHeader: View {
                     .id(m)
                     .transition(.asymmetric(insertion: .push(from: .top), removal: .opacity))
             }
-            Text("Træk sange fra biblioteket over på en playliste under USB i venstre side, eller højreklik på sange → Send til USB. Intet skrives, før du trykker \"Skriv til USB\" – og der tages altid backup af rekordbox-databasen først.")
+            Text("Træk sange fra biblioteket over på en playliste under USB i venstre side, eller højreklik på sange → Send til USB. Det skrives til USB'en med det samme – og der tages altid backup af rekordbox-databasen først.")
                 .font(.system(size: 11)).foregroundColor(.mist.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 20)

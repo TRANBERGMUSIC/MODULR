@@ -1048,6 +1048,15 @@ def read_usb(root):
             "misplaced": len(misplaced_anlz(root, db))}
 
 
+def safe_file_name(name, ext):
+    """Filnavn til USB'en: ulovlige tegn væk og højst 80 tegn – men ENDELSEN bevares altid
+    (før blev lange navne skåret midt i, så ".mp3" forsvandt og CDJ'en sagde "unsupported")."""
+    base = os.path.splitext(name)[0]
+    base = "".join(c for c in base if c not in '/\\:*?"<>|\x00').strip().strip(".")
+    base = (base or "track")[:76].rstrip(" .")
+    return base + "." + (ext or "mp3")
+
+
 def safe_name(s, fallback):
     s = "".join(c for c in (s or "") if c not in '/\\:*?"<>|\x00').strip().strip(".")
     return (s or fallback)[:80]
@@ -1231,7 +1240,7 @@ def write_usb(root, plan):
         ext = os.path.splitext(src)[1].lower().lstrip(".")
         artist = safe_name(tr.get("artist"), "Unknown Artist")
         album = safe_name(tr.get("album"), "UnknownAlbum")
-        fname = safe_name(os.path.basename(src), "track." + ext)
+        fname = safe_file_name(os.path.basename(src), ext)
         usb_rel = "/Contents/%s/%s/%s" % (artist, album, fname)
         if usb_rel in existing_by_path:
             copied[src] = existing_by_path[usb_rel]
