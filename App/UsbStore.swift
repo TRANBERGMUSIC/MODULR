@@ -637,33 +637,6 @@ final class UsbStore: ObservableObject {
         }
     }
 
-    /// Fjern kun det der faktisk blev skrevet – det du trak over, MENS vi skrev, bliver liggende og skrives bagefter.
-    private func removeWritten(_ written: [UsbPending], from d: UsbDrive, keys: [String: Int]) {
-        var cur = pending[d.id] ?? []
-        for w in written {
-            guard let i = cur.firstIndex(where: { $0.key == w.key }) else { continue }
-            let left = cur[i].tracks.filter { !w.tracks.contains($0) }
-            if left.isEmpty {
-                cur.remove(at: i)
-            } else if w.kind == .playlist, let id = keys[w.key] {
-                // Den nye playliste findes nu på stikket – resten lægges i den
-                cur.remove(at: i)
-                if let j = cur.firstIndex(where: { $0.kind == .addTo(id) }) {
-                    for t in left where !cur[j].tracks.contains(t) { cur[j].tracks.append(t) }
-                } else {
-                    cur.append(UsbPending(key: "a-\(id)", kind: .addTo(id), name: "", parent: .root, tracks: left))
-                }
-            } else {
-                cur[i].tracks = left
-            }
-        }
-        // Nye mapper/playlister der nu er skrevet: henvisninger til dem peger nu på deres rigtige id
-        for i in cur.indices {
-            if case .new(let k) = cur[i].parent, let id = keys[k] { cur[i].parent = .existing(id) }
-        }
-        pending[d.id] = cur
-    }
-
     func eject(_ d: UsbDrive) {
         PlayerModel.shared.release(under: d.url)
         message = "Skubber \(d.name) ud …"
