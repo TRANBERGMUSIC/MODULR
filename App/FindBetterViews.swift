@@ -75,7 +75,7 @@ struct FindBetterToolView: View {
                         }
                         if !model.rejections.isEmpty {
                             Card(title: "Afvist og slettet") {
-                                ForEach(model.rejections, id: \.self) { Text("⛔️ " + $0).font(.callout) }
+                                ForEach(model.rejections, id: \.self) { Label($0, systemImage: "xmark.octagon.fill").font(.callout).foregroundColor(.mist.opacity(0.85)) }
                             }
                         }
                         if model.step.map({ $0.rawValue >= FBStep.candidates.rawValue }) == true && model.result == nil {
@@ -169,10 +169,9 @@ struct Card<Content: View>: View {
     var body: some View {
         Panel {
             VStack(alignment: .leading, spacing: 10) {
-                Text(title.uppercased())
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(2)
-                    .foregroundStyle(Color.emberGradient)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.mist)
                 content
             }
         }
@@ -346,7 +345,7 @@ struct ResultCard: View {
 
     var body: some View {
         Card(title: "Fundet og verificeret") {
-            Text("✅ " + result.summary)
+            Label(result.summary, systemImage: "checkmark.circle.fill")
             Text(result.savedFile.lastPathComponent).font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Vis i Finder") { NSWorkspace.shared.activateFileViewerSelecting([result.savedFile]) }

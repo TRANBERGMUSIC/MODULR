@@ -116,7 +116,7 @@ struct PlayerPanel: View {
             }
             .buttonStyle(.press)
             .disabled(t == nil)
-            .help("Forrige sang (eller starten af sangen)")
+            .iconLabel("Forrige sang (eller starten af sangen)")
             CDJButtons()
                 .disabled(t == nil)
             Button { player.next() } label: {
@@ -126,7 +126,7 @@ struct PlayerPanel: View {
             }
             .buttonStyle(.press)
             .disabled(t == nil)
-            .help("Næste sang")
+            .iconLabel("Næste sang")
         }
         .animation(Motion.reveal, value: t?.id)
         .animation(Motion.snappy, value: t?.bpm)
@@ -167,6 +167,9 @@ struct CDJButtons: View {
                     player.cueUp()
                 })
             .help("CUE (tast C): under afspilning tilbage til cue-punktet. Stoppet: sæt cue her – hold for at lytte.")
+            .accessibilityLabel(Text("Cue"))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { player.cueDown(); player.cueUp() }
             // PLAY/PAUSE: lyser når den spiller, blinker når den står stille
             Button { player.playPause() } label: {
                 ZStack {
@@ -183,9 +186,13 @@ struct CDJButtons: View {
             }
             .buttonStyle(PressScaleStyle(scale: 0.9))
             .help("Play/pause (mellemrum)")
+            .accessibilityLabel(Text(player.playing ? "Pause" : "Afspil"))
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { blink = true }
+            // Blinker som på CDJ'en – ikke med "Reducér bevægelse"
+            if !Motion.reduced {
+                withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) { blink = true }
+            }
         }
     }
 }
@@ -281,7 +288,7 @@ struct DetailWaveform: View {
                 .frame(width: 22, height: 20)
         }
         .buttonStyle(.plain)
-        .help(out ? "Zoom ud" : "Zoom ind (eller knib på pegefeltet)")
+        .iconLabel(out ? "Zoom ud" : "Zoom ind (eller knib på pegefeltet)")
     }
 
     func drag(width: Double) -> some Gesture {
@@ -1069,13 +1076,13 @@ struct CueTools: View {
             .menuIndicator(.hidden)
             .frame(width: 28, height: 26)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.08)))
-            .help("Tilføj en del til planen")
+            .iconLabel("Tilføj en del til planen")
             if !player.cueMoved.isEmpty || !player.cueDismissed.isEmpty {
                 Button { player.resetSuggestions() } label: {
                     Image(systemName: "arrow.uturn.backward")
                 }
                 .buttonStyle(CueToolStyle())
-                .help("Fortryd dine flytninger og fjernede forslag i denne sang")
+                .iconLabel("Fortryd dine flytninger og fjernede forslag i denne sang")
                 .transition(.scale.combined(with: .opacity))
             }
         }
@@ -1149,18 +1156,18 @@ struct CueTools: View {
                 Image(systemName: "arrowtriangle.left.fill")
             }
             .buttonStyle(CueToolStyle())
-            .help("Forrige memory cue")
+            .iconLabel("Forrige memory cue")
             Button { if let c = memory.first(where: { $0 > player.position + 0.2 }) { player.seek(seconds: c) } } label: {
                 Image(systemName: "arrowtriangle.right.fill")
             }
             .buttonStyle(CueToolStyle())
-            .help("Næste memory cue")
+            .iconLabel("Næste memory cue")
             Button { LibraryStore.shared.removeCue(track.id, near: player.position, tolerance: 4) } label: {
                 Image(systemName: "xmark")
             }
             .buttonStyle(CueToolStyle())
             .disabled(memory.isEmpty)
-            .help("Slet nærmeste memory cue")
+            .iconLabel("Slet nærmeste memory cue")
             Spacer(minLength: 0)
             let open: Int = suggestions.filter { $0.letter != nil }.count
             Button {
@@ -1294,7 +1301,7 @@ struct SuggestionCard: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.07)))
         }
         .buttonStyle(.press)
-        .help(help)
+        .iconLabel(help)
     }
 
     func clock(_ s: Double) -> String { String(format: "%d:%02d", Int(s) / 60, Int(s) % 60) }

@@ -5,6 +5,9 @@ import SwiftUI
 import AppKit
 
 extension Color {
+    /// Tilstande (samme betydning overalt): lykkedes / fejl. Advarsel = .amber
+    static let success = Color(red: 0.35, green: 0.82, blue: 0.45)
+    static let danger = Color(red: 0.95, green: 0.35, blue: 0.3)
     static let panel = Color(red: 20 / 255, green: 20 / 255, blue: 20 / 255)
     static let hairline = Color.white.opacity(0.07)
     // Flad ember (taste-skill: ingen gradienter på knapper og flader). Navnet bevares, så alt bruger samme farve.
@@ -15,16 +18,124 @@ extension Color {
 // MARK: - Motion (Apple-fjedre + taste-skill: stærk ease-out, ingen hop, kort under hånden)
 
 enum Motion {
+    /// "Reducér bevægelse" i Systemindstillinger → alt skifter med det samme (kun en kort udtoning)
+    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private static let instant = Animation.easeOut(duration: 0.08)
+
     /// Tryk på knapper og pads (100–160 ms)
-    static let press = Animation.easeOut(duration: 0.12)
+    static var press: Animation { reduced ? instant : .easeOut(duration: 0.12) }
     /// Hover-farver og små skift (150–200 ms)
-    static let hover = Animation.easeOut(duration: 0.18)
+    static var hover: Animation { reduced ? instant : .easeOut(duration: 0.18) }
     /// Valg, faner, sidebar-markør – Apples "snappy" fjeder uden overshoot
-    static let snappy = Animation.snappy(duration: 0.32, extraBounce: 0)
+    static var snappy: Animation { reduced ? instant : .snappy(duration: 0.32, extraBounce: 0) }
     /// Paneler og sideskift
-    static let smooth = Animation.smooth(duration: 0.45, extraBounce: 0)
+    static var smooth: Animation { reduced ? instant : .smooth(duration: 0.45, extraBounce: 0) }
     /// Signatur: waveform der skrives ind, cover der åbner (expo-out)
-    static let reveal = Animation.timingCurve(0.16, 1, 0.3, 1, duration: 0.9)
+    static var reveal: Animation { reduced ? instant : .timingCurve(0.16, 1, 0.3, 1, duration: 0.9) }
+}
+
+// MARK: - Statuslinje (i stedet for ✅/⛔️/⚠︎ foran beskeder)
+
+/// En besked fra appen med sin tilstand: ikon og farve fra designsystemet, ikke emoji i teksten.
+struct StatusMessage: Equatable {
+    enum Kind { case success, warning, error, info, working }
+    var kind: Kind
+    var text: String
+
+    /// Læser de gamle præfikser (✅ ⛔️ ⚠︎) og ord som "fejlede"/"kunne ikke" og fjerner emoji fra teksten.
+    init(_ raw: String) {
+        var t = raw.trimmingCharacters(in: .whitespaces)
+        var k: Kind = .info
+        for (prefix, kind) in [("✅", Kind.success), ("⛔️", Kind.error), ("⛔", Kind.error), ("⚠︎", Kind.warning), ("⚠️", Kind.warning), ("⚠", Kind.warning)] {
+            if t.hasPrefix(prefix) {
+                k = kind
+                t = String(t.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                break
+            }
+        }
+        if k == .info {
+            let l = t.lowercased()
+            if l.contains("fejlede") || l.contains("kunne ikke") || l.contains("blev ikke ændret") { k = .error }
+            else if l.hasSuffix("…") || l.hasSuffix("...") { k = .working }
+        }
+        // Emoji midt i teksten (fx "· ⚠︎ Kunne ikke finde") → ingen
+        t = t.replacingOccurrences(of: "⚠︎ ", with: "").replacingOccurrences(of: "✅ ", with: "").replacingOccurrences(of: "⛔️ ", with: "")
+        kind = k
+        text = t
+    }
+
+    var icon: String {
+        switch kind {
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.octagon.fill"
+        case .info: return "info.circle.fill"
+        case .working: return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    var color: Color {
+        switch kind {
+        case .success: return .success
+        case .warning: return .amber
+        case .error: return .danger
+        case .info, .working: return .mist.opacity(0.6)
+        }
+    }
+}
+
+/// Beskedlinjen: ikon i tilstandens farve, teksten, og et kryds. Gode nyheder forsvinder af sig selv efter 8 s;
+/// fejl og advarsler bliver stående, til du lukker dem.
+struct StatusBanner: View {
+    let message: String
+    let close: () -> Void
+    @State private var token = UUID()
+
+    var body: some View {
+        let m = StatusMessage(message)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: m.icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(m.color)
+                .symbolEffect(.pulse, isActive: m.kind == .working)
+            Text(m.text)
+                .font(.system(size: 12))
+                .foregroundColor(.mist.opacity(m.kind == .error ? 0.95 : 0.8))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 8)
+            Button(action: close) {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.mist.opacity(0.4))
+            .help("Luk beskeden")
+            .accessibilityLabel(Text("Luk beskeden"))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(m.kind == .error ? Color.danger.opacity(0.10)
+                  : (m.kind == .warning ? Color.amber.opacity(0.08) : Color.white.opacity(0.04))))
+        .onAppear { scheduleDismiss(m) }
+        .onChange(of: message) { _, new in scheduleDismiss(StatusMessage(new)) }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func scheduleDismiss(_ m: StatusMessage) {
+        let mine = UUID()
+        token = mine
+        guard m.kind == .success || m.kind == .info else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            if token == mine { close() }
+        }
+    }
+}
+
+extension View {
+    /// Ikon-knapper: samme tekst som tooltip og som navn til VoiceOver.
+    func iconLabel(_ text: String) -> some View {
+        help(text).accessibilityLabel(Text(text))
+    }
 }
 
 /// Indgang: delen stiger 10 pt op og toner ind, én gang (eller igen når `trigger` skifter).

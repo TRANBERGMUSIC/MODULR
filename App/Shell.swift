@@ -341,6 +341,7 @@ struct PulsingDot: View {
         }
         .frame(width: 12, height: 12)
         .onAppear {
+            guard !Motion.reduced else { return }
             withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on = true }
         }
     }

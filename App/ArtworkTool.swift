@@ -301,7 +301,9 @@ struct ManualArtworkView: View {
                 } else {
                     List(model.rows) { r in
                         HStack {
-                            Text(r.ok == true ? "✅" : (r.ok == false ? "⛔️" : (r.hasArtwork ? "🖼" : "▫️")))
+                            Image(systemName: r.ok == true ? "checkmark.circle.fill" : (r.ok == false ? "xmark.octagon.fill" : (r.hasArtwork ? "photo.fill" : "photo")))
+                                .foregroundColor(r.ok == true ? .success : (r.ok == false ? .danger : .mist.opacity(0.6)))
+                                .frame(width: 18)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(r.url.lastPathComponent).lineLimit(1)
                                 Text(r.status ?? (r.hasArtwork ? "Har artwork – bliver udskiftet" : "Intet artwork"))

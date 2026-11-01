@@ -185,6 +185,6 @@ struct UndoRedoButtons: View {
         }
         .buttonStyle(.press)
         .disabled(!enabled)
-        .help(help)
+        .iconLabel(help)
     }
 }

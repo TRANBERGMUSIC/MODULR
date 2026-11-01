@@ -679,6 +679,7 @@ struct QualityText: View {
 struct TrackListView: View {
     @ObservedObject private var dragWatch = TableDragWatch.shared
     @State private var editingInfo: LibTrack?
+    @FocusState private var searchFocused: Bool
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var settings: FBSettings
@@ -738,7 +739,14 @@ struct TrackListView: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundColor(.mist.opacity(0.4))
-                    TextField("Søg", text: $ui.search).textFieldStyle(.plain).frame(minWidth: 90, maxWidth: 180)
+                    TextField("Søg (⌘F)", text: $ui.search).textFieldStyle(.plain).frame(minWidth: 90, maxWidth: 180)
+                        .focused($searchFocused)
+                        .onExitCommand { ui.search = ""; searchFocused = false }
+                    if !ui.search.isEmpty {
+                        Button { ui.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundColor(.mist.opacity(0.4))
+                            .iconLabel("Ryd søgningen")
+                    }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
@@ -757,12 +765,9 @@ struct TrackListView: View {
                 .padding(.horizontal, 20).padding(.bottom, 6)
             }
             if let m = library.lastMessage {
-                HStack {
-                    Text(m).font(.system(size: 12)).foregroundColor(.mist.opacity(0.75))
-                    Spacer()
-                    Button { library.lastMessage = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundColor(.mist.opacity(0.4))
-                }
-                .padding(.horizontal, 20).padding(.bottom, 6)
+                StatusBanner(message: m) { library.lastMessage = nil }
+                    .padding(.horizontal, 20).padding(.bottom, 6)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
             }
 
             if library.index.tracks.isEmpty {
@@ -818,12 +823,69 @@ struct TrackListView: View {
                 .overlay {
                     if targeted {
                         DropHint(text: dropHintText).padding(.horizontal, 12).padding(.bottom, 12)
+                    } else if rows.isEmpty {
+                        emptyState
                     }
                 }
                 .animation(Motion.hover, value: targeted)
+                // Slet-tasten: fjern fra playlisten (i en playliste) – ellers spørg før sangene fjernes fra biblioteket
+                .onDeleteCommand { deleteSelected() }
             }
         }
+        .background {
+            // ⌘F: hop til søgefeltet
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
         .fileDrop(targeted: $targeted) { urls in library.importDropped(urls, into: currentPlaylist) }
+    }
+
+    /// Tom liste: forklar hvorfor, og hvad man kan gøre (i stedet for en tom tabel).
+    @ViewBuilder
+    var emptyState: some View {
+        let q = ui.search.trimmingCharacters(in: .whitespaces)
+        VStack(spacing: 10) {
+            if !q.isEmpty || !ui.keyFilter.isEmpty {
+                Image(systemName: "magnifyingglass").font(.system(size: 26, weight: .light)).foregroundColor(.mist.opacity(0.35))
+                Text(q.isEmpty ? "Ingen sange i de valgte tonearter" : "Ingen sange matcher \"\(q)\"")
+                    .font(.system(size: 14, weight: .semibold)).foregroundColor(.mist.opacity(0.85))
+                HStack(spacing: 8) {
+                    if !q.isEmpty { Button("Ryd søgningen") { ui.search = "" } }
+                    if !ui.keyFilter.isEmpty { Button("Fjern toneart-filteret") { ui.keyFilter = [] } }
+                }
+            } else if currentPlaylist != nil {
+                Image(systemName: "music.note.list").font(.system(size: 26, weight: .light)).foregroundColor(.mist.opacity(0.35))
+                Text("Playlisten er tom").font(.system(size: 14, weight: .semibold)).foregroundColor(.mist.opacity(0.85))
+                Text("Træk sange herind fra Alle sange – eller filer fra Finder.")
+                    .font(.system(size: 12)).foregroundColor(.mist.opacity(0.55))
+            } else {
+                Image(systemName: "checkmark.circle").font(.system(size: 26, weight: .light)).foregroundColor(.mist.opacity(0.35))
+                Text("Ingen sange her lige nu").font(.system(size: 14, weight: .semibold)).foregroundColor(.mist.opacity(0.85))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(true)
+    }
+
+    /// Slet-tasten på de valgte sange.
+    func deleteSelected() {
+        let ids = Array(ui.tableSelection)
+        guard !ids.isEmpty else { return }
+        if let pl = currentPlaylist {
+            library.removeFromPlaylist(ids, playlist: pl)
+            library.lastMessage = "\(ids.count) sang\(ids.count == 1 ? "" : "e") fjernet fra playlisten (de er stadig i biblioteket)"
+            ui.tableSelection = []
+        } else {
+            let what = ids.count == 1 ? "\"\(library.index.track(ids[0])?.title ?? "")\"" : "\(ids.count) sange"
+            Dialogs.shared.confirm("Fjern \(what) fra biblioteket?",
+                                   message: "Filerne bliver liggende på din Mac – de forsvinder kun fra MODULR og dine playlister.",
+                                   icon: "trash.fill", button: "Fjern", destructive: true) {
+                library.remove(ids)
+                ui.tableSelection = []
+            }
+        }
     }
 
     var dropHintText: String {
@@ -1535,7 +1597,7 @@ struct RowPlus: View {
         .onHover { hover = $0 }
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
-        .help("Ny playliste eller mappe")
+        .iconLabel("Ny playliste eller mappe")
     }
 }
 
@@ -1563,7 +1625,7 @@ struct EjectButton: View {
         .onHover { hover = $0 }
         .disabled(busy)
         .opacity(busy ? 0.3 : 1)
-        .help("Skub USB'en sikkert ud")
+        .iconLabel("Skub USB'en sikkert ud")
     }
 }
 
@@ -1586,7 +1648,7 @@ struct UsbHeader: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.fill").foregroundStyle(Color.emberGradient)
-                Text(title.uppercased()).font(.system(size: 13, weight: .bold)).tracking(1.5).foregroundColor(.mist)
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundColor(.mist)
                 Spacer()
                 if usb.writing.contains(drive.id) { ProgressView().controlSize(.small) }
                 if usb.writing.contains(drive.id) {
@@ -1615,7 +1677,8 @@ struct UsbHeader: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.amber.opacity(0.10)))
             }
             if let w = drive.formatWarning {
-                Text("⚠︎ " + w).font(.system(size: 12)).foregroundColor(.amber).fixedSize(horizontal: false, vertical: true)
+                Label(w, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundColor(.amber).fixedSize(horizontal: false, vertical: true)
             }
             if let st = usb.settings[drive.id], st.waveformColor == 1 {
                 // Waveform-farven på CDJ'en styres af DEVSETTING.DAT på stikket – BLUE er standard
@@ -1638,9 +1701,8 @@ struct UsbHeader: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let m = usb.message {
-                Text(m).font(.system(size: 12)).foregroundColor(.mist.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
-                    .id(m)
-                    .transition(.asymmetric(insertion: .push(from: .top), removal: .opacity))
+                StatusBanner(message: m) { usb.message = nil }
+                    .transition(.opacity.combined(with: .offset(y: -4)))
             }
             Text("Træk sange fra biblioteket over på en playliste under USB i venstre side, eller højreklik på sange → Send til USB. Det skrives til USB'en med det samme – og der tages altid backup af rekordbox-databasen først.")
                 .font(.system(size: 11)).foregroundColor(.mist.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
@@ -1882,7 +1944,7 @@ struct WaveformColorPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text("WAVEFORM-FARVE").font(.system(size: 11, weight: .bold)).tracking(1.2).foregroundColor(.mist.opacity(0.55))
+                Text("Waveform-farve").font(.system(size: 12, weight: .semibold)).foregroundColor(.mist.opacity(0.7))
                 if changed { Circle().fill(Color.ember).frame(width: 6, height: 6) }
             }
             HStack(spacing: 10) {
@@ -2290,7 +2352,7 @@ struct PendingTracks: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("VENTER PÅ AT BLIVE SKREVET (\(ids.count))").font(.system(size: 10, weight: .bold)).tracking(1.5).foregroundStyle(Color.emberGradient)
+            Text("Venter på at blive skrevet (\(ids.count))").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.emberGradient)
             ScrollView {
                 VStack(spacing: 4) {
                     ForEach(ids, id: \.self) { id in
