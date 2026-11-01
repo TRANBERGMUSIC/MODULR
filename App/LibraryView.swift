@@ -872,9 +872,11 @@ struct TrackListView: View {
                                 if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
                             }
                     }
-                    // Træk sange op/ned i en playliste for at ændre rækkefølgen
-                    .dropDestination(for: String.self) { items, index in
-                        reorderPlaylist(items, at: index, rows: rows)
+                    // Træk sange op/ned i en playliste for at ændre rækkefølgen (slip mellem to sange)
+                    .onInsert(of: DropSupport.types) { index, providers in
+                        DropSupport.read(providers) { strings, files in
+                            reorderPlaylist(strings + files.map(\.absoluteString), at: index, rows: rows)
+                        }
                     }
     }
 
@@ -2053,8 +2055,10 @@ struct UsbPlaylistView: View {
                 .draggable(usbDragItem(t, d))
         }
         // Træk sange op/ned mellem de andre for at ændre rækkefølgen (som i rekordbox)
-        .dropDestination(for: String.self) { items, index in
-            dropInUsbList(items, at: index, list: list, drive: d)
+        .onInsert(of: DropSupport.types) { index, providers in
+            DropSupport.read(providers) { strings, _ in
+                dropInUsbList(strings, at: index, list: list, drive: d)
+            }
         }
     }
 
