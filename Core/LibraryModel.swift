@@ -29,7 +29,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var artFile: String?          // cover (JPEG)
     var hasWave: Bool
     var waveVersion: Int?
-    static let currentWaveVersion = 6   // 6: skarpere grid (BPM fra kick'ets fase gennem hele sangen)
+    static let currentWaveVersion = 7   // 7: grid – drift-rettelse kun når den passer bedre, tag-BPM som udgangspunkt
     var addedAt: Date
     var analyzed: Bool
     var analysisError: String?

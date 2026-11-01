@@ -49,6 +49,7 @@ func khz(_ hz: Double) -> String {
 
 enum Tool: String, CaseIterable, Identifiable {
     case library = "Bibliotek"
+    case assistant = "Assistent"
     case bitrate = "Bitrate-tjek"
     case findBetter = "Find bedre version"
     case artwork = "Artwork"

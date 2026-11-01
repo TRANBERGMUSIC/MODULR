@@ -187,6 +187,30 @@ struct APIKeys: Codable, Equatable {
     var soundCloudClientID = ""
     var soundCloudClientSecret = ""
     var brave = ""
+    var anthropic = ""          // AI-assistenten (Claude Haiku – den billigste model)
+
+    init() {}
+
+    /// Tåler ældre keys.json uden de nyeste felter (ellers ville alle nøgler forsvinde ved en opdatering).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        acoustID = try c.decodeIfPresent(String.self, forKey: .acoustID) ?? ""
+        audd = try c.decodeIfPresent(String.self, forKey: .audd) ?? ""
+        acrHost = try c.decodeIfPresent(String.self, forKey: .acrHost) ?? ""
+        acrKey = try c.decodeIfPresent(String.self, forKey: .acrKey) ?? ""
+        acrSecret = try c.decodeIfPresent(String.self, forKey: .acrSecret) ?? ""
+        soundCloudClientID = try c.decodeIfPresent(String.self, forKey: .soundCloudClientID) ?? ""
+        soundCloudClientSecret = try c.decodeIfPresent(String.self, forKey: .soundCloudClientSecret) ?? ""
+        brave = try c.decodeIfPresent(String.self, forKey: .brave) ?? ""
+        anthropic = try c.decodeIfPresent(String.self, forKey: .anthropic) ?? ""
+    }
+
+    /// Nøglerne fra filen (til steder uden adgang til indstillingerne, fx assistenten).
+    static func load() -> APIKeys {
+        let url = AppFolders.support.appendingPathComponent("keys.json")
+        guard let d = try? Data(contentsOf: url), let k = try? JSONDecoder().decode(APIKeys.self, from: d) else { return APIKeys() }
+        return k
+    }
 }
 
 /// Nøgler gemmes i en fil kun du kan læse (Programsupport/MODULR/keys.json, rettigheder 600).

@@ -11,6 +11,7 @@ extension Tool {
         case .findBetter: return "sparkle.magnifyingglass"
         case .artwork: return "photo.stack"
         case .accounts: return "person.crop.circle"
+        case .assistant: return "sparkles"
         }
     }
 
@@ -21,6 +22,7 @@ extension Tool {
         case .findBetter: return "Find sangen gratis i bedre kvalitet fra kunstneren selv"
         case .artwork: return "Covers til rekordbox og CDJ – samlet, gemt og lagt på automatisk"
         case .accounts: return "Log ind én gang – så husker MODULR det"
+        case .assistant: return "Skriv hvad der skal ske – den udskifter filer, covers, sorterer playlister og meget mere"
         }
     }
 }
@@ -51,6 +53,7 @@ struct RootView: View {
                             case .findBetter: FindBetterToolView()
                             case .artwork: ArtworkToolView()
                             case .accounts: AccountsView()
+                            case .assistant: AssistantView()
                             }
                         }
                         .id(model.tool)

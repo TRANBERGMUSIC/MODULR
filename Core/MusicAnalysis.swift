@@ -180,12 +180,18 @@ enum MusicAnalyzer {
 
     // MARK: Analyse
 
-    static func analyze(url: URL) throws -> MusicAnalysisResult {
+    /// `bpmHint`: en kendt BPM (fra filens tags eller en tidligere analyse). Ligger den tæt på det målte tempo
+    /// (eller dobbelt/halvt), søges der omkring den – så et præcist tag-tempo som 128 ikke bliver til 127,96.
+    static func analyze(url: URL, bpmHint: Double? = nil) throws -> MusicAnalysisResult {
         let (x, sr) = try decodeMono(url: url)
         guard x.count > Int(sr * 2) else { throw AnalyzerError.tooShort }
         let duration = Double(x.count) / sr
         var tempo = estimateTempo(x, sr: sr)
-        if tempo.bpm > 0, let g = refineGrid(x, sr: sr, roughBPM: tempo.bpm) {
+        var rough = tempo.bpm
+        if let h = bpmHint, h > 40, rough > 0 {
+            for m in [1.0, 2.0, 0.5] where abs(h * m / rough - 1) < 0.04 { rough = h * m; break }
+        }
+        if rough > 0, let g = refineGrid(x, sr: sr, roughBPM: rough) {
             tempo.bpm = g.bpm
             tempo.firstBeatMs = g.firstBeatMs
         }
@@ -434,10 +440,10 @@ enum MusicAnalyzer {
         }
         func score(_ bpm: Double) -> Double { smooth(foldOnsets(bpm)).max() ?? 0 }
 
-        // BPM: grov søgning ±1,5 (trin 0,01), så fin ±0,012 (trin 0,001)
+        // BPM: grov søgning ±0,6 (trin 0,01), så fin ±0,012 (trin 0,001)
         var best = (score: -1.0, bpm: roughBPM)
-        var c = roughBPM - 1.5
-        while c <= roughBPM + 1.5 {
+        var c = roughBPM - 0.6
+        while c <= roughBPM + 0.6 {
             let v = score(c)
             if v > best.score { best = (v, c) }
             c += 0.01
@@ -503,9 +509,12 @@ enum MusicAnalyzer {
             let corrected = bpm * (1 - slope * 60 / bpm)
             return abs(corrected - bpm) < 0.3 ? corrected : bpm
         }
-        var bpm = driftCorrected(driftCorrected(fine.bpm))
+        // Rettelsen bruges kun, hvis kick'ene faktisk samler sig bedre med den (ellers den gamle måling)
+        var bpm = fine.bpm
+        let drift = driftCorrected(fine.bpm)
+        if abs(drift - fine.bpm) > 0.0005 && score(drift) >= fine.score * 1.0 { bpm = drift }
         let whole = bpm.rounded()
-        if abs(bpm - whole) < 0.03 && score(whole) >= 0.97 * score(bpm) {
+        if abs(bpm - whole) < 0.05 && score(whole) >= 0.97 * score(bpm) {
             bpm = whole
         } else {
             bpm = (bpm * 1000).rounded() / 1000      // 3 decimaler: griddet sidder også efter 6 minutter

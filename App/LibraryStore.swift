@@ -70,6 +70,8 @@ final class LibraryStore: ObservableObject {
         }
         index = data
         for t in data.tracks where !t.analyzed { enqueueAnalysis(t.id) }
+        // Hot cue A på alle sange der ikke har en endnu
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.addMissingHotCueA() }
         // Genreforslag til sange der mangler (lydens kendetegn regnes ud fra den gemte waveform)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.computeGenreSuggestions() }
         // Sange analyseret før lydstyrke-målingen kom med: mål dem nu
@@ -370,7 +372,8 @@ final class LibraryStore: ObservableObject {
             let attrs = try? FileManager.default.attributesOfItem(atPath: t.path)
             t.fileSize = (attrs?[.size] as? NSNumber)?.int64Value
 
-            let music = try MusicAnalyzer.analyze(url: url)
+            // Kendt BPM (tags eller tidligere analyse) som udgangspunkt – kun hvis den passer til det målte tempo
+            let music = try MusicAnalyzer.analyze(url: url, bpmHint: t.bpm)
             try Data(music.bands).write(to: waveURL(t), options: .atomic)
             try? Data(music.peaks).write(to: peakURL(t), options: .atomic)
             t.hasWave = true
@@ -432,6 +435,13 @@ final class LibraryStore: ObservableObject {
         }
         if let b = t.bpm, b > 0, let f = GenreGuess.features(bands: bands(t), bpm: b, energy: t.energy) {
             t.features = f
+        }
+        // Hot cue A = cue-punktet, hvis sangen ikke har en
+        if t.hotCues?["A"] == nil, let b = t.bpm, b > 0 {
+            let pk = peaks(t)
+            var h = t.hotCues ?? [:]
+            h["A"] = pk.isEmpty ? (t.firstBeatMs ?? 0) / 1000 : PlayerModel.autoCue(for: t, peaks: pk)
+            t.hotCues = h
         }
         let final = t
         update(id) { $0 = final }
@@ -1024,6 +1034,43 @@ final class LibraryStore: ObservableObject {
             if let p = parent, idx.nodes.first(where: { $0.id == p })?.isFolder != true { return }
             idx.nodes[i].parent = parent
             idx.nodes[i].sort = idx.nextSort(under: parent)
+        }
+    }
+
+    /// Ny rækkefølge i en playliste (sange der ikke er med i listen, beholdes til sidst).
+    func setOrder(_ playlist: UUID, _ order: [UUID]) {
+        mutate { idx in
+            guard let i = idx.nodes.firstIndex(where: { $0.id == playlist && !$0.isFolder }) else { return }
+            let cur = idx.nodes[i].trackIDs
+            var seen = Set<UUID>()
+            var out = order.filter { cur.contains($0) && seen.insert($0).inserted }
+            out += cur.filter { !seen.contains($0) }
+            idx.nodes[i].trackIDs = out
+        }
+    }
+
+    // MARK: Hot cue A på alle sange
+
+    /// Sange uden hot cue A får den på cue-punktet (første slag / hvor lyden starter).
+    func addMissingHotCueA() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let idx = snapshot()
+            var set = [UUID: Double]()
+            for t in idx.tracks where t.hotCues?["A"] == nil && (t.bpm ?? 0) > 0 {
+                let pk = peaks(t)
+                set[t.id] = pk.isEmpty ? (t.firstBeatMs ?? 0) / 1000 : PlayerModel.autoCue(for: t, peaks: pk)
+            }
+            guard !set.isEmpty else { return }
+            mutate { idx in
+                for i in idx.tracks.indices {
+                    guard let at = set[idx.tracks[i].id], idx.tracks[i].hotCues?["A"] == nil else { continue }
+                    var h = idx.tracks[i].hotCues ?? [:]
+                    h["A"] = at
+                    idx.tracks[i].hotCues = h
+                }
+            }
+            let n = set.count
+            DispatchQueue.main.async { self.lastMessage = "Hot cue A sat på \(n) sang\(n == 1 ? "" : "e") (på cue-punktet)" }
         }
     }
 

@@ -99,11 +99,13 @@ enum GenreGuess {
             return max(0, 1 - d / 4)
         }
         add("Drum & Bass", 2.2 * near(bpm, 165, 178))
-        add("Hardstyle", 1.6 * near(bpm, 148, 160) * (energy >= 7 ? 1 : 0.5))
-        add("Hard Techno", 1.6 * near(bpm, 142, 160) * (energy >= 7 ? 1 : 0.4) * (hi < 0.30 ? 1 : 0.7))
-        add("Dubstep", 1.2 * near(bpm, 138, 150) * (lo > 0.42 ? 1 : 0.5) * (quiet > 0.2 ? 1 : 0.6))
+        // 140–160 BPM med fire-på-gulvet er langt oftest hård techno – dubstep og hardstyle er sjældne i en
+        // techno-samling og kræver mere end tempoet (dubstep: halvt tempo og lange pauser uden kick)
+        add("Hard Techno", 2.2 * near(bpm, 138, 165) * (energy >= 6 ? 1 : 0.75))
+        add("Hardstyle", 0.7 * near(bpm, 150, 160) * (hi > 0.32 && energy >= 8 ? 1 : 0.3))
+        add("Dubstep", 0.6 * near(bpm, 138, 150) * (lo > 0.45 && quiet > 0.3 ? 1 : 0.2))
         add("Trance", 1.5 * near(bpm, 132, 142) * (mi + hi > 0.55 ? 1 : 0.6) * (quiet > 0.12 ? 1.1 : 0.7))
-        add("Techno", 1.5 * near(bpm, 128, 142) * (energy >= 6 ? 1 : 0.7) * (mi < 0.36 ? 1 : 0.7))
+        add("Techno", 1.6 * near(bpm, 128, 138) * (energy >= 6 ? 1 : 0.7) * (mi < 0.36 ? 1 : 0.7))
         add("Melodic Techno", 1.2 * near(bpm, 120, 126) * (mi > 0.34 ? 1 : 0.5) * (quiet > 0.15 ? 1 : 0.6))
         add("Tech House", 1.5 * near(bpm, 124, 128) * (lo > 0.40 ? 1 : 0.7) * (mi < 0.36 ? 1 : 0.75))
         add("House", 1.3 * near(bpm, 118, 126) * (mi > 0.33 ? 1 : 0.75))
