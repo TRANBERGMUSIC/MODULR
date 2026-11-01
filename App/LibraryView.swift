@@ -59,6 +59,7 @@ extension LibTrack {
     var sortDuration: Double { duration ?? 0 }
     var sortQuality: Int { tierKbps ?? 0 }
     var sortAdded: Double { addedAt.timeIntervalSince1970 }
+    var sortGenre: String { genre.isEmpty ? (genreSuggestion ?? "") : genre }
 }
 
 // MARK: - Skærmen
@@ -677,6 +678,7 @@ struct QualityText: View {
 
 struct TrackListView: View {
     @ObservedObject private var dragWatch = TableDragWatch.shared
+    @State private var editingInfo: LibTrack?
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var usb: UsbStore
     @EnvironmentObject var settings: FBSettings
@@ -781,6 +783,8 @@ struct TrackListView: View {
                         .width(78)
                     TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
                         .width(40)
+                    TableColumn("Genre", value: \LibTrack.sortGenre) { (t: LibTrack) in GenreCell(track: t) }
+                        .width(min: 70, ideal: 96)
                     TableColumn("Energi", value: \LibTrack.sortEnergy) { (t: LibTrack) in EnergyBar(value: t.energy) }
                         .width(52)
                     TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
@@ -837,6 +841,7 @@ struct TrackListView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
+                .sheet(item: $editingInfo) { t in TrackInfoSheet(track: t) }
                 .fileDrop(targeted: $targeted) { urls in library.importDropped(urls, into: currentPlaylist) }
                 .overlay {
                     if targeted {
@@ -899,6 +904,37 @@ struct TrackListView: View {
             items.append(.action("Find bedre version gratis…", icon: "sparkle.magnifyingglass") {
                 app.findBetterRequest = t.url
                 app.tool = .findBetter
+            })
+        }
+        // Info: genre (forslag fra lyden) og navne
+        if list.count == 1 {
+            items.append(.action("Rediger titel, kunstner og genre…", icon: "pencil") { editingInfo = t })
+        }
+        var genres = [MMItem]()
+        let suggested = list.compactMap { library.index.track($0) }.filter { $0.genreSuggestion != nil && $0.genreSuggestion != $0.genre }
+        if !suggested.isEmpty {
+            let label = list.count == 1 ? "Brug forslaget: \(suggested[0].genreSuggestion ?? "")" : "Brug forslagene (\(suggested.count) sange)"
+            genres.append(.action(label, icon: "wand.and.stars") { library.setGenre(list, nil) })
+            genres.append(.divider)
+        }
+        for g in GenreGuess.general {
+            genres.append(.action(g, icon: t.genre == g ? "checkmark" : nil) { library.setGenre(list, g) })
+        }
+        genres.append(.divider)
+        genres.append(.action("Skriv selv…", icon: "character.cursor.ibeam") {
+            Dialogs.shared.name(NamePrompt(title: "Genre", text: t.genre.isEmpty ? (t.genreSuggestion ?? "") : t.genre,
+                                           icon: "music.quarternote.3", button: "Gem") { g in library.setGenre(list, g) })
+        })
+        if list.contains(where: { !(library.index.track($0)?.genre.isEmpty ?? true) }) {
+            genres.append(.action("Fjern genre", icon: "xmark", destructive: true) { library.setGenre(list, "") })
+        }
+        items.append(.submenu("Genre", icon: "music.quarternote.3", genres))
+        let nameFixes = list.compactMap { library.index.track($0) }
+            .filter { NameCleaner.suggest(artist: $0.artist, title: $0.title, fileName: $0.fileName) != nil }.count
+        if nameFixes > 0 {
+            items.append(.action(nameFixes == 1 && list.count == 1 ? "Ryd op i navnet" : "Ryd op i navne (\(nameFixes))", icon: "textformat") {
+                let n = library.cleanNames(list)
+                library.lastMessage = "\(n) navn\(n == 1 ? "" : "e") ryddet op – ⌘Z fortryder"
             })
         }
         // Artwork: tag coveret fra en (gammel) sang og læg det på en anden (fx en WAV uden cover)
@@ -2150,5 +2186,123 @@ struct PendingTracks: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.ember.opacity(0.06)))
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
+    }
+}
+
+
+// MARK: - Genre og info
+
+struct GenreCell: View {
+    let track: LibTrack
+    var body: some View {
+        if !track.genre.isEmpty {
+            Text(track.genre).foregroundColor(.mist.opacity(0.85)).lineLimit(1)
+        } else if let g = track.genreSuggestion {
+            HStack(spacing: 3) {
+                Image(systemName: "sparkle").font(.system(size: 8)).foregroundColor(.ember.opacity(0.8))
+                Text(g).italic().foregroundColor(.mist.opacity(0.45)).lineLimit(1)
+            }
+            .help("Forslag ud fra lyden og dine andre sange – højreklik → Genre for at bruge det eller vælge en anden")
+        } else {
+            Text("–").foregroundColor(.mist.opacity(0.3))
+        }
+    }
+}
+
+/// Ret titel, kunstner og genre – med appens forslag, og valg om at skrive i filen/omdøbe filen.
+struct TrackInfoSheet: View {
+    let track: LibTrack
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var artist: String
+    @State private var genre: String
+    @State private var writeTags: Bool
+    @State private var renameFile = false
+
+    init(track: LibTrack) {
+        self.track = track
+        _title = State(initialValue: track.title)
+        _artist = State(initialValue: track.artist)
+        _genre = State(initialValue: track.genre)
+        _writeTags = State(initialValue: ArtworkLibrary.writableExts.contains(track.ext))
+    }
+
+    var nameSuggestion: (artist: String, title: String)? {
+        NameCleaner.suggest(artist: track.artist, title: track.title, fileName: track.fileName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rediger sang").font(.system(size: 16, weight: .semibold)).foregroundColor(.mist)
+            field("Titel", $title)
+            field("Kunstner", $artist)
+            if let s = nameSuggestion, s.title != title || s.artist != artist {
+                Button {
+                    title = s.title
+                    artist = s.artist
+                } label: {
+                    Label("Forslag: \(s.artist.isEmpty ? "" : s.artist + " – ")\(s.title)", systemImage: "wand.and.stars")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(.ember)
+            }
+            HStack(spacing: 8) {
+                field("Genre", $genre)
+                Menu {
+                    ForEach(GenreGuess.general, id: \.self) { g in Button(g) { genre = g } }
+                } label: { Image(systemName: "chevron.down") }
+                .menuStyle(.borderlessButton)
+                .frame(width: 30)
+                .padding(.top, 16)
+            }
+            if let g = track.genreSuggestion, g != genre {
+                Button { genre = g } label: {
+                    Label("Forslag ud fra lyden: \(g)", systemImage: "sparkle")
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(.ember)
+            }
+            Divider()
+            Toggle("Skriv også titel, kunstner og genre ind i filen", isOn: $writeTags)
+                .disabled(!ArtworkLibrary.writableExts.contains(track.ext))
+            Toggle("Omdøb filen til \"\(artist.isEmpty ? title : artist + " - " + title).\(track.ext)\"", isOn: $renameFile)
+            Text("rekordbox og CDJ'en viser det, der står i MODULR, når du sender til USB. Omdøbning ændrer kun filnavnet i samme mappe.")
+                .font(.system(size: 11)).foregroundColor(.mist.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Annuller") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Gem") {
+                    LibraryStore.shared.setInfo(track.id, title: title.trimmingCharacters(in: .whitespaces),
+                                                artist: artist.trimmingCharacters(in: .whitespaces),
+                                                genre: genre.trimmingCharacters(in: .whitespaces),
+                                                writeTags: writeTags, renameFile: renameFile)
+                    dismiss()
+                }
+                .buttonStyle(.ember)
+                .keyboardShortcut(.defaultAction)
+                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 460)
+        .background(Color.panel)
+        .preferredColorScheme(.dark)
+    }
+
+    func field(_ label: String, _ text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 11, weight: .semibold)).foregroundColor(.mist.opacity(0.6))
+            TextField(label, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+        }
     }
 }

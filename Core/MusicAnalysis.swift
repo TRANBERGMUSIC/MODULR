@@ -434,10 +434,10 @@ enum MusicAnalyzer {
         }
         func score(_ bpm: Double) -> Double { smooth(foldOnsets(bpm)).max() ?? 0 }
 
-        // BPM: grov søgning ±0,6 (trin 0,01), så fin ±0,012 (trin 0,001)
+        // BPM: grov søgning ±1,5 (trin 0,01), så fin ±0,012 (trin 0,001)
         var best = (score: -1.0, bpm: roughBPM)
-        var c = roughBPM - 0.6
-        while c <= roughBPM + 0.6 {
+        var c = roughBPM - 1.5
+        while c <= roughBPM + 1.5 {
             let v = score(c)
             if v > best.score { best = (v, c) }
             c += 0.01
@@ -449,12 +449,66 @@ enum MusicAnalyzer {
             if v > fine.score { fine = (v, c) }
             c += 0.001
         }
-        var bpm = fine.bpm
+        // Skarpere: følg kick'et gennem hele sangen. Glider fasen langsomt (fx 2 ms pr. minut), er BPM en anelse
+        // forkert – hældningen giver den præcise BPM (som når man retter griddet i rekordbox, så det sidder
+        // både i starten og slutningen).
+        func driftCorrected(_ bpm: Double) -> Double {
+            let inv = bpm / (fps * 60)
+            let hist = smooth(foldOnsets(bpm))
+            let center = Double(hist.indices.max(by: { hist[$0] < hist[$1] }) ?? 0) / Double(nb)
+            let segFrames = max(1, Int(20 * fps))
+            var tc = [Double](), ph = [Double](), wt = [Double]()
+            var j = 0
+            var segStart = 0
+            while segStart < n {
+                var sx = 0.0, sy = 0.0, sw = 0.0
+                while j < onsetIdx.count && onsetIdx[j] < segStart + segFrames {
+                    let p = Double(onsetIdx[j]) * inv
+                    var d = (p - floor(p)) - center
+                    d -= d.rounded()
+                    if abs(d) < 0.12 {
+                        let a = 2 * Double.pi * d
+                        let v = onsetVal[j]
+                        sx += cos(a) * v
+                        sy += sin(a) * v
+                        sw += v
+                    }
+                    j += 1
+                }
+                if sw > 0 && (sx * sx + sy * sy).squareRoot() > 0.5 * sw {
+                    tc.append((Double(segStart) + Double(segFrames) / 2) / fps)
+                    ph.append(atan2(sy, sx) / (2 * Double.pi))
+                    wt.append(sw)
+                }
+                segStart += segFrames
+            }
+            guard ph.count >= 4 else { return bpm }
+            for i in 1..<ph.count {
+                var d = ph[i] - ph[i - 1]
+                d -= d.rounded()
+                ph[i] = ph[i - 1] + d
+            }
+            var W = 0.0, mt = 0.0, mp = 0.0
+            for i in ph.indices { W += wt[i]; mt += wt[i] * tc[i]; mp += wt[i] * ph[i] }
+            mt /= W
+            mp /= W
+            var num = 0.0, den = 0.0
+            for i in ph.indices {
+                let dt = tc[i] - mt
+                num += wt[i] * dt * (ph[i] - mp)
+                den += wt[i] * dt * dt
+            }
+            guard den > 0 else { return bpm }
+            let slope = num / den                       // fase pr. sekund
+            let corrected = bpm * (1 - slope * 60 / bpm)
+            return abs(corrected - bpm) < 0.3 ? corrected : bpm
+        }
+        var bpm = driftCorrected(driftCorrected(fine.bpm))
         let whole = bpm.rounded()
-        if abs(bpm - whole) < 0.05 && score(whole) >= 0.97 * fine.score {
+        if abs(bpm - whole) < 0.03 && score(whole) >= 0.97 * score(bpm) {
             bpm = whole
         } else {
-            bpm = (bpm * 100).rounded() / 100
+            bpm = (bpm * 1000).rounded() / 1000      // 3 decimaler: griddet sidder også efter 6 minutter
         }
 
         // Fase: groft fra kick'et, præcist fra forkanten af det samlede signal

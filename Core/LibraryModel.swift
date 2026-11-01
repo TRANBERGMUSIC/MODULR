@@ -29,7 +29,7 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var artFile: String?          // cover (JPEG)
     var hasWave: Bool
     var waveVersion: Int?
-    static let currentWaveVersion = 5
+    static let currentWaveVersion = 6   // 6: skarpere grid (BPM fra kick'ets fase gennem hele sangen)
     var addedAt: Date
     var analyzed: Bool
     var analysisError: String?
@@ -50,6 +50,8 @@ struct LibTrack: Codable, Identifiable, Equatable {
     var hotCues: [String: Double]? // hot cues A–H (sekunder), som på en CDJ
     var eqRegions: [EQRegionData]? // EQ på bestemte stykker af sangen (høres live, kan gemmes i filen)
     var sections: [SongSection]?  // dine egne sektioner (intro, drop …) – ellers bruges appens forslag
+    var genreSuggestion: String?  // appens forslag til genre (ud fra lyden og dine andre sange)
+    var features: [Double]?       // lydens kendetegn (til genreforslag)
     var deadSpace: Double?        // sekunders stilhed til sidst
     var trimmed: Bool?            // død luft er fjernet
 

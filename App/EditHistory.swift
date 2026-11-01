@@ -14,8 +14,14 @@ struct TrackEditState: Equatable {
     var hotCues: [String: Double]?
     var eqRegions: [EQRegionData]?
     var sections: [SongSection]?
+    var title: String
+    var artist: String
+    var genre: String
 
     init(_ t: LibTrack) {
+        title = t.title
+        artist = t.artist
+        genre = t.genre
         bpm = t.bpm
         firstBeatMs = t.firstBeatMs
         gridEdited = t.gridEdited
@@ -33,6 +39,9 @@ struct TrackEditState: Equatable {
         t.hotCues = hotCues
         t.eqRegions = eqRegions
         t.sections = sections
+        t.title = title
+        t.artist = artist
+        t.genre = genre
     }
 }
 

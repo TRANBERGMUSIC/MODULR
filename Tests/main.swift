@@ -788,6 +788,25 @@ do {
     check("EQ-område dækker sit stykke", r.contains(10) && r.contains(19.9) && !r.contains(20))
 }
 
+// MARK: - Genre og navne
+section("Genre og navne")
+do {
+    check("Beatport-genre → bred", GenreGuess.normalize("Techno (Peak Time / Driving)") == "Techno")
+    check("Melodic House & Techno", GenreGuess.normalize("Melodic House & Techno") == "Melodic Techno")
+    check("Tech House før House", GenreGuess.normalize("Tech House") == "Tech House")
+    check("DnB", GenreGuess.normalize("Drum & Bass") == "Drum & Bass")
+    let f174 = [174.0, 0.4, 0.35, 0.25, 8, 0.3, 0.1]
+    check("174 BPM → Drum & Bass", GenreGuess.fromSound(f174)?.genre == "Drum & Bass", "\(GenreGuess.fromSound(f174)?.genre ?? "-")")
+    let f126 = [126.0, 0.46, 0.30, 0.24, 7, 0.2, 0.05]
+    let g126 = GenreGuess.fromSound(f126)?.genre ?? "-"
+    check("126 BPM, basset → Tech House eller House", ["Tech House", "House", "Progressive House"].contains(g126), g126)
+    let n1 = NameCleaner.suggest(artist: "", title: "01_artist_name_-_my_track_(extended_mix)_[www.free.com]", fileName: "x.mp3")
+    check("Navn: spornummer, _ og skrald væk", n1?.artist == "Artist Name" && n1?.title == "My Track (Extended Mix)", "\(n1?.artist ?? "-") | \(n1?.title ?? "-")")
+    check("Navn: \"99 Problems\" røres ikke", NameCleaner.suggest(artist: "Jay", title: "99 Problems", fileName: "") == nil)
+    let n2 = NameCleaner.suggest(artist: "CHRIS LAKE", title: "TURN OFF THE LIGHTS", fileName: "")
+    check("Navn: STORE BOGSTAVER → normale", n2?.artist == "Chris Lake" && n2?.title == "Turn Off the Lights", "\(n2?.artist ?? "-") | \(n2?.title ?? "-")")
+}
+
 try? FileManager.default.removeItem(at: tmp)
 print("\n\(passed) bestået, \(failed) fejlet")
 exit(failed == 0 ? 0 : 1)

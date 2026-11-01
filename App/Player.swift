@@ -279,7 +279,16 @@ final class PlayerModel: ObservableObject {
         startFrame = 0
         position = 0
         cuePreviewing = false
-        cuePoint = autoCue(for: t)
+        // Cue-punktet = hot cue A (de er altid det samme). Mangler A, sættes den på cue-punktet.
+        cuePoint = t.hotCues?["A"] ?? autoCue(for: t)
+        if t.hotCues?["A"] == nil, (t.bpm ?? 0) > 0, !peaks.isEmpty, LibraryStore.shared.index.track(t.id) != nil {
+            let at = cuePoint
+            LibraryStore.shared.update(t.id) {
+                var h = $0.hotCues ?? [:]
+                if h["A"] == nil { h["A"] = at }
+                $0.hotCues = h
+            }
+        }
         guard let f = try? AVAudioFile(forReading: t.url) else {
             file = nil
             duration = t.duration ?? 0
@@ -305,7 +314,7 @@ final class PlayerModel: ObservableObject {
                 guard let r = result else { return }
                 self.bands = r.bands
                 self.peaks = r.peaks
-                if !self.playing, let t = self.track { self.cuePoint = self.autoCue(for: t) }
+                if !self.playing, let t = self.track { self.cuePoint = self.liveTrack?.hotCues?["A"] ?? self.autoCue(for: t) }
                 self.externalOverview = WaveShape.preview(bands: r.bands, peaks: r.peaks, width: 2400, height: 80)
                 if (self.track?.bpm ?? 0) <= 0 || LibraryStore.shared.index.track(id) == nil {
                     self.track?.bpm = (self.track?.bpm ?? 0) > 0 ? self.track?.bpm : r.bpm
@@ -585,6 +594,10 @@ final class PlayerModel: ObservableObject {
             pause()
         } else if !atCue {
             cuePoint = quantized(position)
+            // Nyt cue-punkt = ny hot cue A (som på CDJ'en, hvor A og cue følges ad i MODULR)
+            if let t = liveTrack, LibraryStore.shared.index.track(t.id) != nil {
+                LibraryStore.shared.setHotCue(t.id, "A", at: cuePoint)
+            }
         }
         seek(seconds: cuePoint)
         cuePreviewing = true
@@ -614,6 +627,7 @@ final class PlayerModel: ObservableObject {
         let existing = t.hotCues?[letter]
         if delete {
             LibraryStore.shared.setHotCue(t.id, letter, at: nil)
+            if letter == "A" { cuePoint = autoCue(for: t) }
             return
         }
         if let at = existing {
@@ -622,6 +636,7 @@ final class PlayerModel: ObservableObject {
         } else {
             let at = quantized(position)
             LibraryStore.shared.setHotCue(t.id, letter, at: at)
+            if letter == "A" { cuePoint = at }   // hot cue A og cue-punktet er det samme
             // Lær hvordan du sætter cues: ligger den lidt før/efter en sektionsstart, noteres forskydningen
             if let bpm = t.bpm, bpm > 0,
                let rule = CueRules.describe(at, sections: sections, bpm: bpm, firstBeat: autoCue(for: t)),

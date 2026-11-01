@@ -70,6 +70,8 @@ final class LibraryStore: ObservableObject {
         }
         index = data
         for t in data.tracks where !t.analyzed { enqueueAnalysis(t.id) }
+        // Genreforslag til sange der mangler (lydens kendetegn regnes ud fra den gemte waveform)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.computeGenreSuggestions() }
         // Sange analyseret før lydstyrke-målingen kom med: mål dem nu
         for t in data.tracks where t.analyzed && (t.lufs == nil || t.deadSpace == nil) && t.analysisError == nil { enqueueMeasure(t.id) }
     }
@@ -375,7 +377,13 @@ final class LibraryStore: ObservableObject {
             t.waveVersion = LibTrack.currentWaveVersion
             t.duration = music.duration
             if t.gridEdited != true {
-                if t.bpm == nil || t.bpm == 0 { t.bpm = music.bpm }
+                // Analysens BPM passer præcist til første slag. En BPM fra filens tags (ofte rundet, fx 128)
+                // gav et grid der skred – den bruges kun til at vælge dobbelt/halv tempo.
+                var b = music.bpm
+                if let tag = t.bpm, tag > 0, b > 0 {
+                    if abs(tag / b - 2) < 0.04 { b *= 2 } else if abs(tag / b - 0.5) < 0.02 { b /= 2 }
+                }
+                if b > 0 { t.bpm = b } else if t.bpm == nil { t.bpm = 0 }
                 t.firstBeatMs = music.firstBeatMs
             }
             if t.key == nil { t.key = music.key }
@@ -422,8 +430,12 @@ final class LibraryStore: ObservableObject {
                 ArtworkLibrary.shared.add(a, song: song, source: "Fra fil: \(url.lastPathComponent)", file: url)
             }
         }
+        if let b = t.bpm, b > 0, let f = GenreGuess.features(bands: bands(t), bpm: b, energy: t.energy) {
+            t.features = f
+        }
         let final = t
         update(id) { $0 = final }
+        scheduleGenreSuggestions()
         WaveformCache.shared.invalidate(id)
         DispatchQueue.main.async {
             if PlayerModel.shared.track?.id == id { PlayerModel.shared.refreshBands() }
@@ -798,6 +810,118 @@ final class LibraryStore: ObservableObject {
         DispatchQueue.main.async { self.lastMessage = count > 0 ? "\(count) originaler gendannet" : "Ingen originaler at gendanne" }
     }
 
+    // MARK: Genre og navne
+
+    private static var genreWork: DispatchWorkItem?
+
+    /// Genreforslag kort efter (mange analyser i træk bliver til én beregning).
+    func scheduleGenreSuggestions() {
+        DispatchQueue.main.async {
+            Self.genreWork?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.computeGenreSuggestions() }
+            Self.genreWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: w)
+        }
+    }
+
+    /// Forslag til alle sange: lær af dem der har en genre (dine egne eller fra filens tags), ellers ud fra lyden.
+    func computeGenreSuggestions() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let idx = snapshot()
+            var feats = [UUID: [Double]]()
+            for t in idx.tracks {
+                if let f = t.features { feats[t.id] = f; continue }
+                guard t.hasWave, let b = t.bpm, b > 0 else { continue }
+                let bd = bands(t)
+                if let f = GenreGuess.features(bands: bd, bpm: b, energy: t.energy) { feats[t.id] = f }
+            }
+            var labeled = [(id: UUID, features: [Double], genre: String)]()
+            for t in idx.tracks {
+                if let f = feats[t.id], let g = GenreGuess.normalize(t.genre) { labeled.append((t.id, f, g)) }
+            }
+            var sugg = [UUID: String]()
+            for t in idx.tracks {
+                guard let f = feats[t.id] else { continue }
+                let others = labeled.filter { $0.id != t.id }.map { (features: $0.features, genre: $0.genre) }
+                if let g = GenreGuess.fromLibrary(f, labeled: others) ?? GenreGuess.fromSound(f) { sugg[t.id] = g.genre }
+            }
+            mutate { idx in
+                for i in idx.tracks.indices {
+                    let id = idx.tracks[i].id
+                    if idx.tracks[i].features == nil, let f = feats[id] { idx.tracks[i].features = f }
+                    if let g = sugg[id], idx.tracks[i].genreSuggestion != g { idx.tracks[i].genreSuggestion = g }
+                }
+            }
+        }
+    }
+
+    /// Sæt genre på sangene (kan fortrydes). nil = brug hver sangs eget forslag.
+    func setGenre(_ ids: [UUID], _ genre: String?) {
+        for id in ids {
+            guard let t = snapshot().track(id) else { continue }
+            let g = genre ?? t.genreSuggestion ?? t.genre
+            if g != t.genre { edit(id, "Genre") { $0.genre = g } }
+        }
+        scheduleGenreSuggestions()      // dine valg gør de næste forslag bedre
+    }
+
+    /// Ryd op i titel og kunstner på sangene (kan fortrydes).
+    func cleanNames(_ ids: [UUID]) -> Int {
+        var n = 0
+        for id in ids {
+            guard let t = snapshot().track(id),
+                  let s = NameCleaner.suggest(artist: t.artist, title: t.title, fileName: t.fileName) else { continue }
+            edit(id, "Ryd op i navn") { $0.artist = s.artist; $0.title = s.title }
+            n += 1
+        }
+        return n
+    }
+
+    /// Ret titel, kunstner og genre – og skriv dem evt. ind i filen og/eller omdøb filen til "Kunstner - Titel".
+    func setInfo(_ id: UUID, title: String, artist: String, genre: String, writeTags: Bool, renameFile: Bool) {
+        edit(id, "Rediger info") {
+            $0.title = title
+            $0.artist = artist
+            $0.genre = genre
+        }
+        scheduleGenreSuggestions()
+        guard writeTags || renameFile, let t = snapshot().track(id) else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            var notes = [String]()
+            if writeTags {
+                if ArtworkLibrary.writableExts.contains(t.ext) {
+                    var frames = [ID3.textFrame("TIT2", title), ID3.textFrame("TPE1", artist)]
+                    if !genre.isEmpty { frames.append(ID3.textFrame("TCON", genre)) }
+                    do { try AudioTagger.setFrames(frames, on: t.url); notes.append("skrevet i filen") }
+                    catch { notes.append("kunne ikke skrive i filen: \(error.localizedDescription)") }
+                } else {
+                    notes.append("\(t.ext.uppercased()) kan ikke få tags skrevet – kun ændret i MODULR")
+                }
+            }
+            if renameFile {
+                let bad = CharacterSet(charactersIn: "/\\:*?\"<>|")
+                let base = (artist.isEmpty ? title : "\(artist) - \(title)").components(separatedBy: bad).joined()
+                    .trimmingCharacters(in: .whitespaces)
+                let dest = t.url.deletingLastPathComponent().appendingPathComponent(base).appendingPathExtension(t.ext)
+                if base.isEmpty || dest.path == t.path {
+                    // intet at gøre
+                } else if FileManager.default.fileExists(atPath: dest.path) {
+                    notes.append("filen blev ikke omdøbt – \(dest.lastPathComponent) findes allerede")
+                } else {
+                    do {
+                        try FileManager.default.moveItem(at: t.url, to: dest)
+                        update(id) { $0.path = dest.path }
+                        notes.append("filen hedder nu \(dest.lastPathComponent)")
+                    } catch {
+                        notes.append("kunne ikke omdøbe filen: \(error.localizedDescription)")
+                    }
+                }
+            }
+            let msg = "\(title): " + (notes.isEmpty ? "gemt" : notes.joined(separator: " · "))
+            DispatchQueue.main.async { self.lastMessage = msg }
+        }
+    }
+
     // MARK: Grid og markeringer
 
     func setGrid(_ id: UUID, bpm: Double, firstBeatMs: Double) {
@@ -1067,19 +1191,23 @@ final class LibraryStore: ObservableObject {
         analysis["duration"] = t.duration ?? 0
         analysis["first_beat_ms"] = t.firstBeatMs ?? 0
         analysis["bands"] = Data(bands(t)).base64EncodedString()
-        // Hot cues A–H med farve og memory cues – som rekordbox sender dem til CDJ'en
+        // Cue-punktet (det orange): hot cue A, hvis den er sat – ellers første slag/lydens start
+        let pk = peaks(t)
+        // Uden data om hvor lyden starter: første slag i griddet (ikke 0:00)
+        let autoMs = pk.isEmpty ? (t.firstBeatMs ?? 0) : PlayerModel.autoCue(for: t, peaks: pk) * 1000
+        let cueMs = (t.hotCues?["A"]).map { $0 * 1000 } ?? autoMs
+        // Hot cues A–H med farve og memory cues – som rekordbox sender dem til CDJ'en.
+        // Hot cue A er altid det samme som cue-punktet (mangler A, sættes den dér).
         var hot = [[String: Any]]()
         for (i, letter) in HotCue.letters.enumerated() {
-            guard let sec = t.hotCues?[letter] else { continue }
+            var sec = t.hotCues?[letter]
+            if letter == "A", sec == nil, (t.bpm ?? 0) > 0 { sec = cueMs / 1000 }
+            guard let sec else { continue }
             let c = HotCue.rgb[letter] ?? (1, 1, 1)
             hot.append(["slot": i + 1, "ms": sec * 1000, "rgb": [Int((c.0 * 255).rounded()), Int((c.1 * 255).rounded()), Int((c.2 * 255).rounded())]])
         }
         analysis["hot_cues"] = hot
         var memory = (t.cues ?? []).map { $0 * 1000 }
-        // Den orange cue på første slag (så CDJ'en står klar på første beat, ligesom i MODULR)
-        let pk = peaks(t)
-        // Uden data om hvor lyden starter: første slag i griddet (ikke 0:00)
-        let cueMs = pk.isEmpty ? (t.firstBeatMs ?? 0) : PlayerModel.autoCue(for: t, peaks: pk) * 1000
         if (t.bpm ?? 0) > 0, !memory.contains(where: { abs($0 - cueMs) < 5 }) { memory.append(cueMs) }
         analysis["memory_cues"] = memory.sorted()
         // Sangens opbygning → phrases på CDJ-3000 (intro/up/down/chorus/outro som rekordbox)
