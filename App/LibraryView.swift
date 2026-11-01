@@ -771,41 +771,9 @@ struct TrackListView: View {
                          targeted: targeted)
             } else {
                 Table(of: LibTrack.self, selection: $ui.tableSelection, sortOrder: $sortOrder) {
-                    TableColumn("Preview") { (t: LibTrack) in WaveCell(track: t) }
-                        .width(min: 110, ideal: 200, max: 420)
-                    TableColumn("") { (t: LibTrack) in Cover(track: t, size: 26) }
-                        .width(30)
-                    TableColumn("Kunstner", value: \LibTrack.artist) { (t: LibTrack) in ArtistCell(track: t) }
-                        .width(min: 70, ideal: 110)
-                    TableColumn("Titel", value: \LibTrack.title) { (t: LibTrack) in TitleCell(track: t) }
-                        .width(min: 110, ideal: 180)
-                    TableColumn("Key", value: \LibTrack.sortKey) { (t: LibTrack) in KeyCell(track: t) }
-                        .width(78)
-                    TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
-                        .width(40)
-                    TableColumn("Genre", value: \LibTrack.sortGenre) { (t: LibTrack) in GenreCell(track: t) }
-                        .width(min: 70, ideal: 96)
-                    TableColumn("Energi", value: \LibTrack.sortEnergy) { (t: LibTrack) in EnergyBar(value: t.energy) }
-                        .width(52)
-                    TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
-                        .width(46)
-                    TableColumn("Kvalitet · LUFS", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
-                        .width(min: 120, ideal: 150)
+                    libColumns
                 } rows: {
-                    ForEach(rows) { t in
-                        TableRow(t)
-                            .draggable(dragPayload(for: t))
-                            .dropDestination(for: URL.self) { urls in
-                                // Et billede på en sang = sangens artwork (på alle valgte, hvis sangen er valgt)
-                                let ids: [UUID] = ui.tableSelection.contains(t.id) ? Array(ui.tableSelection) : [t.id]
-                                let rest = library.takeArtworkImages(urls.filter(\.isFileURL), for: ids)
-                                if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
-                            }
-                    }
-                    // Træk sange op/ned i en playliste for at ændre rækkefølgen
-                    .dropDestination(for: String.self) { items, index in
-                        reorderPlaylist(items, at: index, rows: rows)
-                    }
+                    libRows(rows)
                 }
                 .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
@@ -863,6 +831,51 @@ struct TrackListView: View {
             return "Slip for at tilføje til \(n.name)"
         }
         return "Slip for at tilføje til biblioteket"
+    }
+
+    // Kolonner og rækker i hver sin del – så Swift kan typetjekke tabellen hurtigt
+    @TableColumnBuilder<LibTrack, KeyPathComparator<LibTrack>>
+    var libColumns: some TableColumnContent<LibTrack, KeyPathComparator<LibTrack>> {
+
+                    TableColumn("Preview") { (t: LibTrack) in WaveCell(track: t) }
+                        .width(min: 110, ideal: 200, max: 420)
+                    TableColumn("") { (t: LibTrack) in Cover(track: t, size: 26) }
+                        .width(30)
+                    TableColumn("Kunstner", value: \LibTrack.artist) { (t: LibTrack) in ArtistCell(track: t) }
+                        .width(min: 70, ideal: 110)
+                    TableColumn("Titel", value: \LibTrack.title) { (t: LibTrack) in TitleCell(track: t) }
+                        .width(min: 110, ideal: 180)
+                    TableColumn("Key", value: \LibTrack.sortKey) { (t: LibTrack) in KeyCell(track: t) }
+                        .width(78)
+                    TableColumn("BPM", value: \LibTrack.sortBPM) { (t: LibTrack) in BPMCell(track: t) }
+                        .width(40)
+                    TableColumn("Genre", value: \LibTrack.sortGenre) { (t: LibTrack) in GenreCell(track: t) }
+                        .width(min: 70, ideal: 96)
+                    TableColumn("Energi", value: \LibTrack.sortEnergy) { (t: LibTrack) in EnergyBar(value: t.energy) }
+                        .width(52)
+                    TableColumn("Længde", value: \LibTrack.sortDuration) { (t: LibTrack) in DurationCell(track: t) }
+                        .width(46)
+                    TableColumn("Kvalitet · LUFS", value: \LibTrack.sortQuality) { (t: LibTrack) in QualityCell(track: t) }
+                        .width(min: 120, ideal: 150)
+    }
+
+    @TableRowBuilder<LibTrack>
+    func libRows(_ rows: [LibTrack]) -> some TableRowContent<LibTrack> {
+
+                    ForEach(rows) { t in
+                        TableRow(t)
+                            .draggable(dragPayload(for: t))
+                            .dropDestination(for: URL.self) { urls in
+                                // Et billede på en sang = sangens artwork (på alle valgte, hvis sangen er valgt)
+                                let ids: [UUID] = ui.tableSelection.contains(t.id) ? Array(ui.tableSelection) : [t.id]
+                                let rest = library.takeArtworkImages(urls.filter(\.isFileURL), for: ids)
+                                if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
+                            }
+                    }
+                    // Træk sange op/ned i en playliste for at ændre rækkefølgen
+                    .dropDestination(for: String.self) { items, index in
+                        reorderPlaylist(items, at: index, rows: rows)
+                    }
     }
 
     /// Slip sange mellem andre i en playliste: de flyttes derhen (fra en anden liste lægges de i playlisten på stedet).
@@ -1953,32 +1966,9 @@ struct UsbPlaylistView: View {
             VStack(spacing: 0) {
                 UsbHeader(drive: d, title: node?.name ?? d.name)
                 Table(of: UsbTrackInfo.self, selection: $selection) {
-                    TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
-                        .width(30)
-                    TableColumn("Waveform på CDJ") { (t: UsbTrackInfo) in UsbWaveCell(track: t, root: d.url) }
-                        .width(min: 110, ideal: 200, max: 420)
-                    TableColumn("") { (t: UsbTrackInfo) in UsbCoverCell(track: t, root: d.url) }
-                        .width(30)
-                    TableColumn("Kunstner") { (t: UsbTrackInfo) in UsbTextCell(text: t.artist, alpha: 0.85) }
-                    TableColumn("Titel") { (t: UsbTrackInfo) in UsbTextCell(text: t.title, alpha: 1) }
-                    TableColumn("Key") { (t: UsbTrackInfo) in UsbKeyCell(key: t.key) }
-                        .width(56)
-                    TableColumn("BPM") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.bpmText(t.bpm), alpha: 1) }
-                        .width(48)
-                    TableColumn("Længde") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.timeText(t.duration), alpha: 0.8) }
-                        .width(56)
+                    usbColumns(list, d)
                 } rows: {
-                    ForEach(list) { t in
-                        TableRow(t)
-                            .draggable({ () -> UsbDragItem in
-                                TableDragWatch.shared.started()
-                                return UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url))
-                            }())
-                    }
-                    // Træk sange op/ned mellem de andre for at ændre rækkefølgen (som i rekordbox)
-                    .dropDestination(for: String.self) { items, index in
-                        dropInUsbList(items, at: index, list: list, drive: d)
-                    }
+                    usbRows(list, d)
                 }
                 .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
@@ -2035,6 +2025,43 @@ struct UsbPlaylistView: View {
         } else {
             Text("USB'en er ikke sat i").foregroundColor(.mist.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    @TableColumnBuilder<UsbTrackInfo, Never>
+    func usbColumns(_ list: [UsbTrackInfo], _ d: UsbDrive) -> some TableColumnContent<UsbTrackInfo, Never> {
+
+                    TableColumn("#") { (t: UsbTrackInfo) in UsbIndexCell(index: (list.firstIndex(of: t) ?? 0) + 1) }
+                        .width(30)
+                    TableColumn("Waveform på CDJ") { (t: UsbTrackInfo) in UsbWaveCell(track: t, root: d.url) }
+                        .width(min: 110, ideal: 200, max: 420)
+                    TableColumn("") { (t: UsbTrackInfo) in UsbCoverCell(track: t, root: d.url) }
+                        .width(30)
+                    TableColumn("Kunstner") { (t: UsbTrackInfo) in UsbTextCell(text: t.artist, alpha: 0.85) }
+                    TableColumn("Titel") { (t: UsbTrackInfo) in UsbTextCell(text: t.title, alpha: 1) }
+                    TableColumn("Key") { (t: UsbTrackInfo) in UsbKeyCell(key: t.key) }
+                        .width(56)
+                    TableColumn("BPM") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.bpmText(t.bpm), alpha: 1) }
+                        .width(48)
+                    TableColumn("Længde") { (t: UsbTrackInfo) in UsbTextCell(text: UsbTrackInfo.timeText(t.duration), alpha: 0.8) }
+                        .width(56)
+    }
+
+    @TableRowBuilder<UsbTrackInfo>
+    func usbRows(_ list: [UsbTrackInfo], _ d: UsbDrive) -> some TableRowContent<UsbTrackInfo> {
+        ForEach(list) { t in
+            TableRow(t)
+                .draggable(usbDragItem(t, d))
+        }
+        // Træk sange op/ned mellem de andre for at ændre rækkefølgen (som i rekordbox)
+        .dropDestination(for: String.self) { items, index in
+            dropInUsbList(items, at: index, list: list, drive: d)
+        }
+    }
+
+    /// Laves først når man begynder at trække (så tabellen kan tegnes forfra bagefter).
+    func usbDragItem(_ t: UsbTrackInfo, _ d: UsbDrive) -> UsbDragItem {
+        TableDragWatch.shared.started()
+        return UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url))
     }
 
     /// Slip i USB-playlisten: sange fra samme playliste flyttes hen hvor du slap dem; fra biblioteket eller en
