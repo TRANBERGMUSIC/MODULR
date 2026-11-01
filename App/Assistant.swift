@@ -279,9 +279,10 @@ enum AssistantTools {
     static func node(_ s: String?) -> LibNode? {
         guard let s = s?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
         let l = s.lowercased()
-        return lib.index.nodes.first { $0.id.uuidString.lowercased().hasPrefix(l) && l.count >= 4 }
-            ?? lib.index.nodes.first { $0.name.lowercased() == l }
-            ?? lib.index.nodes.first { $0.name.lowercased().contains(l) }
+        let nodes = lib.index.nodes
+        if l.count >= 4, let n = nodes.first(where: { $0.id.uuidString.lowercased().hasPrefix(l) }) { return n }
+        if let n = nodes.first(where: { $0.name.lowercased() == l }) { return n }
+        return nodes.first(where: { $0.name.lowercased().contains(l) })
     }
 
     static func line(_ t: LibTrack) -> String {
@@ -453,7 +454,7 @@ enum AssistantTools {
             }
             let t = trackIDs(i["track_ids"])
             let name = (i["playlist_name"] as? String ?? "MODULR").trimmingCharacters(in: .whitespaces)
-            if let existing = usb.contents[d.id]?.nodes.first(where: { !$0.folder && $0.name.lowercased() == name.lowercased() }) {
+            if let existing = usb.contents[d.id]?.nodes?.first(where: { !$0.folder && $0.name.lowercased() == name.lowercased() }) {
                 usb.add(t, to: d, existing: existing.id)
             } else {
                 usb.newPlaylist(d, name: name, parent: .root, tracks: t)
@@ -509,7 +510,9 @@ struct AssistantView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: model.lines.count) { _, _ in
-                    withAnimation(Motion.snappy) { proxy.scrollTo(model.lines.last?.id, anchor: .bottom) }
+                    if let last = model.lines.last?.id {
+                        withAnimation(Motion.snappy) { proxy.scrollTo(last, anchor: .bottom) }
+                    }
                 }
             }
             .overlay { if targeted { DropHint(text: "Slip filerne – stierne sættes ind i beskeden").padding(16) } }
