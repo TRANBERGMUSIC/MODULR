@@ -802,6 +802,10 @@ struct TrackListView: View {
                                 if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
                             }
                     }
+                    // Træk sange op/ned i en playliste for at ændre rækkefølgen
+                    .dropDestination(for: String.self) { items, index in
+                        reorderPlaylist(items, at: index, rows: rows)
+                    }
                 }
                 .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
@@ -859,6 +863,45 @@ struct TrackListView: View {
             return "Slip for at tilføje til \(n.name)"
         }
         return "Slip for at tilføje til biblioteket"
+    }
+
+    /// Slip sange mellem andre i en playliste: de flyttes derhen (fra en anden liste lægges de i playlisten på stedet).
+    func reorderPlaylist(_ items: [String], at index: Int, rows: [LibTrack]) {
+        // Filer fra Finder kan også ende her (som tekst): billeder → cover på sangen, lyd → ind i listen
+        let files = items.compactMap { s -> URL? in
+            if s.hasPrefix("file://") { return URL(string: s) }
+            if s.hasPrefix("/") { return URL(fileURLWithPath: s) }
+            return nil
+        }
+        if !files.isEmpty {
+            let target: [UUID] = index < rows.count ? [rows[index].id] : []
+            let rest = library.takeArtworkImages(files, for: target)
+            if !rest.isEmpty { library.importDropped(rest, into: currentPlaylist) }
+            return
+        }
+        let dragged = DropSupport.trackIDs(items)
+        guard !dragged.isEmpty else { return }
+        guard let pl = currentPlaylist, let node = library.index.nodes.first(where: { $0.id == pl }) else {
+            library.lastMessage = "Rækkefølgen kan kun ændres i en playliste"
+            return
+        }
+        // Sorteret efter en kolonne: tilbage til playlistens egen rækkefølge først
+        if sortOrder != TrackListView.defaultSort { sortOrder = TrackListView.defaultSort }
+        let shown = rows.map(\.id)
+        var anchor: UUID?
+        var k = index
+        while k < shown.count {
+            if !dragged.contains(shown[k]) { anchor = shown[k]; break }
+            k += 1
+        }
+        let missing = dragged.filter { !node.trackIDs.contains($0) }
+        // De flyttede beholder deres indbyrdes rækkefølge
+        let ids = node.trackIDs.filter { dragged.contains($0) } + missing
+        if !missing.isEmpty { library.add(missing, to: pl) }
+        var rest = node.trackIDs.filter { !ids.contains($0) }
+        let pos = anchor.flatMap { a in rest.firstIndex(of: a) } ?? rest.count
+        rest.insert(contentsOf: ids, at: pos)
+        library.setOrder(pl, rest)
     }
 
     func dragPayload(for t: LibTrack) -> String {
@@ -1334,15 +1377,36 @@ struct UsbNodeTree: View {
     }
 
     func usbFolderMenu(_ n: UsbNodeInfo) -> [MMItem] {
-        guard n.folder else { return [] }
         var items = [MMItem]()
+        let what = n.folder ? "mappen" : "playlisten"
+        let del: [MMItem] = [
+            .divider,
+            .action("Slet \(what) (sangene bliver på USB'en)", icon: "trash", destructive: true) {
+                Dialogs.shared.confirm("Slet \(what) \"\(n.name)\" fra \(drive.name)?",
+                                       message: n.folder ? "Mappen og alle playlister i den slettes fra USB'en. Sangene bliver liggende på stikket." :
+                                                "Playlisten slettes fra USB'en. Sangene bliver liggende på stikket.",
+                                       icon: "trash.fill", button: "Slet", destructive: true) {
+                    if ui.selection == .usb(drive.id, n.id) { ui.selection = .usb(drive.id, nil) }
+                    usb.deletePlaylists(drive, ids: [n.id], withSongs: false)
+                }
+            },
+            .action("Slet \(what) og dens sange…", icon: "trash.slash", destructive: true) {
+                Dialogs.shared.confirm("Slet \"\(n.name)\" og dens sange?",
+                                       message: "Sange der ikke ligger i andre playlister på USB'en, slettes også fra stikket (filer, waveform og cover). Sange der også ligger i andre playlister, bliver.",
+                                       icon: "trash.fill", button: "Slet alt", destructive: true) {
+                    if ui.selection == .usb(drive.id, n.id) { ui.selection = .usb(drive.id, nil) }
+                    usb.deletePlaylists(drive, ids: [n.id], withSongs: true)
+                }
+            },
+        ]
+        guard n.folder else { return del }
         items.append(.action("Ny playliste i mappen…", icon: "music.note.list") {
             prompt("Ny playliste", "Ny playliste") { _ = usb.newPlaylist(drive, name: $0, parent: .existing(n.id)) }
         })
         items.append(.action("Ny mappe i mappen…", icon: "folder.fill.badge.plus") {
             prompt("Ny mappe", "Ny mappe") { usb.newFolder(drive, name: $0, parent: .existing(n.id)) }
         })
-        return items
+        return items + del
     }
 
     /// Værn mod en beskadiget database, hvor en mappe peger på sig selv.
@@ -1383,7 +1447,7 @@ struct UsbNodeTree: View {
                 if n.folder {
                     RowPlus(visible: hovered == n.id || ui.selection == .usb(drive.id, n.id)) {
                         openFolders.insert(n.id)
-                        return usbFolderMenu(n)
+                        return usbFolderMenu(n).filter { !$0.destructive && !$0.isDivider }
                     }
                 }
             }
@@ -1911,6 +1975,10 @@ struct UsbPlaylistView: View {
                                 return UsbDragItem(text: dragText(t, drive: d), file: t.fileURL(root: d.url))
                             }())
                     }
+                    // Træk sange op/ned mellem de andre for at ændre rækkefølgen (som i rekordbox)
+                    .dropDestination(for: String.self) { items, index in
+                        dropInUsbList(items, at: index, list: list, drive: d)
+                    }
                 }
                 .id(dragWatch.epoch)
                 .scrollContentBackground(.hidden)
@@ -1967,6 +2035,35 @@ struct UsbPlaylistView: View {
         } else {
             Text("USB'en er ikke sat i").foregroundColor(.mist.opacity(0.5)).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Slip i USB-playlisten: sange fra samme playliste flyttes hen hvor du slap dem; fra biblioteket eller en
+    /// anden playliste på stikket lægges de i playlisten.
+    func dropInUsbList(_ items: [String], at index: Int, list: [UsbTrackInfo], drive d: UsbDrive) {
+        guard let pid = nodeID else { return }
+        var usbIDs = [Int]()
+        for s in items {
+            if let r = UsbDragItem.decode(s), r.drive == d.id { usbIDs += r.ids }
+        }
+        let libIDs = DropSupport.trackIDs(items)
+        if !libIDs.isEmpty { usb.add(libIDs, to: d, existing: pid) }
+        guard !usbIDs.isEmpty else { return }
+        var seen = Set<Int>()
+        let moving = usbIDs.filter { seen.insert($0).inserted }
+        let order = list.map(\.id)
+        let inList = order.filter { moving.contains($0) }      // beholder deres indbyrdes rækkefølge
+        guard !inList.isEmpty else { usb.addExisting(d, playlist: pid, tracks: moving); return }
+        // Den sang der skal stå lige efter de flyttede (springer de flyttede selv over)
+        var anchor: Int?
+        var k = index
+        while k < order.count {
+            if !inList.contains(order[k]) { anchor = order[k]; break }
+            k += 1
+        }
+        var rest = order.filter { !inList.contains($0) }
+        let pos = anchor.flatMap { a in rest.firstIndex(of: a) } ?? rest.count
+        rest.insert(contentsOf: inList, at: pos)
+        if rest != order { usb.reorder(d, playlist: pid, order: rest) }
     }
 
     /// Det der trækkes: "usbtracks:<id,id>@<drev>" (til playlister i MODULR) og selve filen (til Finder).

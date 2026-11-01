@@ -542,6 +542,14 @@ final class UsbStore: ObservableObject {
              done: "\(tracks.count) sang\(tracks.count == 1 ? "" : "e") flyttet.")
     }
 
+    /// Slet playlister/mapper på USB'en. `withSongs`: slet også de sange der så ikke ligger i nogen anden playliste.
+    func deletePlaylists(_ d: UsbDrive, ids: [Int], withSongs: Bool) {
+        if withSongs { PlayerModel.shared.release(under: d.url) }
+        let names = ids.compactMap { id in contents[d.id]?.nodes?.first { $0.id == id }?.name }.joined(separator: ", ")
+        edit(d, ["delete_playlists": ids, "delete_orphans": withSongs],
+             done: "\(names) er slettet fra \(d.name)" + (withSongs ? " – sammen med sange der ikke lå i andre playlister." : " (sangene ligger stadig på USB'en)."))
+    }
+
     func reorder(_ d: UsbDrive, playlist: Int, order: [Int]) {
         edit(d, ["order": [["playlist": playlist, "tracks": order]]], done: "Rækkefølgen er gemt på USB'en.")
     }

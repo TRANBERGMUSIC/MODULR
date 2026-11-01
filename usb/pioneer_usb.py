@@ -1094,7 +1094,9 @@ def edit_usb(root, plan):
       "remove":   [{"playlist": id, "tracks": [track-id, …]}],   # fjern fra playliste (sangen bliver på USB'en)
       "add":      [{"playlist": id, "tracks": [track-id, …]}],   # sæt eksisterende USB-sange i en playliste
       "order":    [{"playlist": id, "tracks": [track-id, …]}],   # ny rækkefølge
-      "delete":   [track-id, …]                                   # slet sangen helt fra USB'en
+      "delete":   [track-id, …],                                  # slet sangen helt fra USB'en
+      "delete_playlists": [node-id, …],                           # slet playlister/mapper (mapper med alt indhold)
+      "delete_orphans": bool                                       # …og sange der så ikke ligger i nogen playliste
     }"""
     p = pdb_path(root)
     with open(p, "rb") as f:
@@ -1106,6 +1108,32 @@ def edit_usb(root, plan):
     log = []
     touched = set()
 
+    # Slet playlister og mapper (en mappe tager alt under sig med). Sangene bliver på USB'en,
+    # medmindre delete_orphans: så slettes de sange der ikke længere ligger i nogen playliste.
+    tree = db.all(T_PLAYLIST_TREE)
+    gone_nodes = set()
+    def collect(nid):
+        if nid in gone_nodes:
+            return
+        gone_nodes.add(nid)
+        for r in tree:
+            if r["parent"] == nid and r["id"] != nid:
+                collect(r["id"])
+    for nid in plan.get("delete_playlists", []):
+        if any(r["id"] == int(nid) for r in tree):
+            collect(int(nid))
+    orphan_delete = set()
+    if gone_nodes:
+        entries = db.all(T_PLAYLIST_ENTRIES)
+        in_gone = {e["track_id"] for e in entries if e["playlist_id"] in gone_nodes}
+        elsewhere = {e["track_id"] for e in entries if e["playlist_id"] not in gone_nodes}
+        db.delete_rows(T_PLAYLIST_ENTRIES, lambda e: e["playlist_id"] in gone_nodes)
+        db.delete_rows(T_PLAYLIST_TREE, lambda r: r["id"] in gone_nodes)
+        names = [r["name"] for r in tree if r["id"] in gone_nodes]
+        log.append("Slettet: " + ", ".join(names))
+        if plan.get("delete_orphans"):
+            orphan_delete = in_gone - elsewhere
+        # renummerér søskende-sortering er ikke nødvendig – CDJ'en sorterer efter tallet, huller gør intet
     removed_pairs = set()                 # (playlist, track)
     for op in plan.get("remove", []):
         pid = int(op["playlist"])
@@ -1115,7 +1143,7 @@ def edit_usb(root, plan):
         touched.add(pid)
         log.append("Fjernet %d fra playliste %d" % (n, pid))
 
-    delete = {int(x) for x in plan.get("delete", []) if int(x) in tracks}
+    delete = {int(x) for x in plan.get("delete", []) if int(x) in tracks} | {t for t in orphan_delete if t in tracks}
     files_to_remove = []
     if delete:
         pls = {e["playlist_id"] for e in db.all(T_PLAYLIST_ENTRIES) if e["track_id"] in delete}
@@ -1133,7 +1161,7 @@ def edit_usb(root, plan):
 
     for op in plan.get("add", []):
         pid = int(op["playlist"])
-        if pid not in playlists:
+        if pid not in playlists or pid in gone_nodes:
             raise PdbError("Playlisten findes ikke på USB'en")
         for tid in op.get("tracks", []):
             tid = int(tid)
@@ -1157,7 +1185,7 @@ def edit_usb(root, plan):
                 move_files.append((old_folder, new_folder))
                 log.append("Waveform-filer flyttet derhen hvor CDJ'en kigger: " + t["title"])
 
-    for pid in touched:
+    for pid in touched - gone_nodes:
         db.renumber_playlist(pid)
     for op in plan.get("order", []):
         db.renumber_playlist(int(op["playlist"]), [int(x) for x in op.get("tracks", [])])
@@ -1169,7 +1197,8 @@ def edit_usb(root, plan):
     def strip_moved(rows):
         return [{k: v for k, v in r.items() if not (k == "analyze_path" and r["id"] in moved)} for r in rows]
     for t in (T_TRACKS, T_ARTISTS, T_ALBUMS, T_KEYS, T_PLAYLIST_TREE, T_ARTWORK, T_GENRES):
-        before = [r for r in old.all(t) if not (t == T_TRACKS and r["id"] in delete)]
+        before = [r for r in old.all(t) if not (t == T_TRACKS and r["id"] in delete)
+                  and not (t == T_PLAYLIST_TREE and r["id"] in gone_nodes)]
         after = check.all(t)
         if t == T_TRACKS and moved:
             before, after = strip_moved(before), strip_moved(after)
@@ -1178,10 +1207,12 @@ def edit_usb(root, plan):
     def key(e):
         return (e["playlist_id"], e["track_id"])
     before = {key(e) for e in old.all(T_PLAYLIST_ENTRIES)
-              if e["track_id"] not in delete and key(e) not in removed_pairs}
+              if e["track_id"] not in delete and key(e) not in removed_pairs and e["playlist_id"] not in gone_nodes}
     after = {key(e) for e in check.all(T_PLAYLIST_ENTRIES)}
     if not before <= after:
         raise PdbError("Kontrol fejlede for playlisterne – intet er ændret på USB'en")
+    if any(pl in gone_nodes for pl, _t in after):
+        raise PdbError("Kontrol fejlede: en slettet playliste har stadig sange – intet er ændret")
     if any(t in delete for _pl, t in after):
         raise PdbError("Kontrol fejlede: en slettet sang står stadig i en playliste – intet er ændret")
 
