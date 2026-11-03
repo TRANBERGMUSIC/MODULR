@@ -587,7 +587,7 @@ enum UpdateError: LocalizedError {
 }
 
 final class Updater: ObservableObject {
-    static let owner = "TRANBERGMUSIC"
+    static let owner = "TRANBERGGROUP"
     static let repo = "MODULR"
     static let branch = "main"
 

@@ -21,7 +21,7 @@ enum HTTPError: LocalizedError {
 
 final class HTTP {
     static let shared = HTTP()
-    static let userAgent = "MODULR/1.3 (+https://github.com/TRANBERGMUSIC/MODULR)"
+    static let userAgent = "MODULR/1.3 (+https://github.com/TRANBERGGROUP/MODULR)"
 
     private let lock = NSLock()
     private var nextAllowed: [String: Date] = [:]
